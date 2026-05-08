@@ -1,0 +1,21 @@
+<view class="page" wx:if="{{room}}">
+  <view class="title">复盘</view>
+  <view class="subtitle">{{board.name}} · {{room.logs.length}} 条记录</view>
+
+  <view class="section panel">
+    <view class="label">身份表</view>
+    <view wx:for="{{players}}" wx:key="seat" class="list-item row">
+      <view class="value">{{item.seat}}号</view>
+      <view>{{item.roleName}}</view>
+      <view class="tag">{{item.campName}}</view>
+    </view>
+  </view>
+
+  <view class="section panel">
+    <view class="label">操作记录</view>
+    <view wx:for="{{logs}}" wx:key="id" class="list-item">
+      <view class="value">{{item.type}}</view>
+      <view class="label">{{item.text}}</view>
+    </view>
+  </view>
+</view>

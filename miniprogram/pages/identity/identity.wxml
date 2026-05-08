@@ -1,0 +1,22 @@
+<view class="page" wx:if="{{assignment}}">
+  <view class="title">{{role.name}}</view>
+  <view class="subtitle">{{seat}}号 · {{campName}}</view>
+
+  <view class="section panel">
+    <view class="label">技能</view>
+    <view class="value role-summary">{{role.summary}}</view>
+  </view>
+
+  <view wx:if="{{treasureCards.length}}" class="section panel">
+    <view class="label">盗宝牌</view>
+    <view class="tag" wx:for="{{treasureCards}}" wx:key="id">{{item.name}}</view>
+  </view>
+
+  <button class="button secondary" bindtap="backRoom">返回房间</button>
+</view>
+
+<view class="page" wx:else>
+  <view class="title">还没有身份</view>
+  <view class="subtitle">请先选择座位，并等待发牌。</view>
+  <button class="button secondary" bindtap="backRoom">返回房间</button>
+</view>

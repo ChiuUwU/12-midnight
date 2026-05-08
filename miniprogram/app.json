@@ -1,0 +1,19 @@
+{
+  "pages": [
+    "pages/home/home",
+    "pages/create-room/create-room",
+    "pages/join-room/join-room",
+    "pages/room/room",
+    "pages/identity/identity",
+    "pages/judge/judge",
+    "pages/review/review"
+  ],
+  "window": {
+    "navigationBarTitleText": "十二点天黑",
+    "navigationBarBackgroundColor": "#121212",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f6f2ea"
+  },
+  "style": "v2",
+  "sitemapLocation": "sitemap.json"
+}

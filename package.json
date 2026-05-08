@@ -1,0 +1,12 @@
+{
+  "name": "twelve-midnight",
+  "version": "0.1.0",
+  "private": true,
+  "description": "十二点天黑：狼人杀发牌和法官流程辅助网页工具",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

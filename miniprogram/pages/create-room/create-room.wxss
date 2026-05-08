@@ -1,0 +1,3 @@
+.board-summary {
+  margin: 16rpx 0 0;
+}

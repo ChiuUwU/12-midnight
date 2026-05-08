@@ -1,0 +1,36 @@
+<view class="page" wx:if="{{room}}">
+  <view class="title">房间 {{room.id}}</view>
+  <view class="subtitle">{{board.name}} · {{modeName}} · {{phaseName}}</view>
+
+  <view class="section panel">
+    <view class="row">
+      <view>
+        <view class="label">当前座位</view>
+        <view class="value">{{mySeatText}}</view>
+      </view>
+      <view>
+        <view class="label">人数</view>
+        <view class="value">{{occupiedCount}} / 12</view>
+      </view>
+    </view>
+  </view>
+
+  <view class="section grid">
+    <view
+      wx:for="{{seats}}"
+      wx:key="seat"
+      class="seat {{item.className}}"
+      data-seat="{{item.seat}}"
+      bindtap="chooseSeat"
+    >
+      {{item.seat}}号
+    </view>
+  </view>
+
+  <button wx:if="{{canDeal}}" class="button primary" bindtap="deal">发牌</button>
+  <button wx:if="{{room.phase === 'DEALT'}}" class="button primary" bindtap="goIdentity">查看我的身份</button>
+  <button wx:if="{{room.phase === 'DEALT'}}" class="button secondary" bindtap="goJudge">法官总览</button>
+  <button wx:if="{{room.phase === 'DEALT'}}" class="button secondary" bindtap="goReview">复盘</button>
+  <button wx:if="{{room.phase === 'WAITING'}}" class="button secondary" bindtap="fillTestSeats">补齐测试座位</button>
+  <button class="button danger" bindtap="resetRoom">重置本地数据</button>
+</view>

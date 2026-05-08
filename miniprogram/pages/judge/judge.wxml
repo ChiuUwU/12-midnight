@@ -1,0 +1,16 @@
+<view class="page" wx:if="{{room}}">
+  <view class="title">法官总览</view>
+  <view class="subtitle">{{board.name}} · 房间 {{room.id}}</view>
+
+  <view class="section panel">
+    <view wx:for="{{players}}" wx:key="seat" class="list-item row">
+      <view>
+        <view class="value">{{item.seat}}号 · {{item.roleName}}</view>
+        <view class="label">{{item.campName}} · {{item.aliveText}}</view>
+      </view>
+      <view class="tag">{{item.revealedText}}</view>
+    </view>
+  </view>
+
+  <button class="button secondary" bindtap="goReview">复盘</button>
+</view>

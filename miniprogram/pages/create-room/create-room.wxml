@@ -1,0 +1,21 @@
+<view class="page">
+  <view class="title">创建房间</view>
+  <view class="subtitle">选择模式和版型后生成房间号</view>
+
+  <view class="section panel">
+    <view class="label">模式</view>
+    <picker mode="selector" range="{{modeNames}}" value="{{modeIndex}}" bindchange="onModeChange">
+      <view class="value">{{modeNames[modeIndex]}}</view>
+    </picker>
+  </view>
+
+  <view class="section panel">
+    <view class="label">版型</view>
+    <picker mode="selector" range="{{boardNames}}" value="{{boardIndex}}" bindchange="onBoardChange">
+      <view class="value">{{boardNames[boardIndex]}}</view>
+    </picker>
+    <view class="subtitle board-summary">{{currentBoard.summary}}</view>
+  </view>
+
+  <button class="button primary" bindtap="createRoom">创建</button>
+</view>

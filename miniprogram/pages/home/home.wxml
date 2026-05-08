@@ -1,0 +1,16 @@
+<view class="page">
+  <view class="title">十二点天黑</view>
+  <view class="subtitle">狼人杀发牌和流程辅助工具</view>
+
+  <button class="button primary" bindtap="goCreate">创建房间</button>
+  <button class="button secondary" bindtap="goJoin">加入房间</button>
+  <button wx:if="{{hasRoom}}" class="button secondary" bindtap="continueRoom">继续房间</button>
+
+  <view class="section panel">
+    <view class="label">第一版支持</view>
+    <view class="list-item">预女猎白混</view>
+    <view class="list-item">假面舞会</view>
+    <view class="list-item">盗宝大师</view>
+    <view class="list-item">机械狼通灵师</view>
+  </view>
+</view>
