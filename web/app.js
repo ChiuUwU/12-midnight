@@ -2,6 +2,7 @@
   const STORAGE_KEY = "twelve_midnight_web_state_v1";
   const app = document.querySelector("#app");
   const IS_REMOTE = location.protocol === "http:" || location.protocol === "https:";
+  const AUTO_REFRESH_VIEWS = ["room", "identity", "judge", "review"];
 
   const DEFAULT_RULES = {
     winCondition: "KILL_SIDE",
@@ -495,7 +496,7 @@
   async function setView(view) {
     state.view = view;
     saveState();
-    if (IS_REMOTE && state.currentRoomId && ["room", "identity", "judge", "review"].includes(view)) {
+    if (IS_REMOTE && state.currentRoomId && AUTO_REFRESH_VIEWS.includes(view)) {
       try {
         await refreshRemoteRoom();
       } catch (error) {
@@ -1770,7 +1771,7 @@
 
   if (IS_REMOTE) {
     setInterval(() => {
-      if (!state.currentRoomId || !["room", "judge", "review", "sheriff", "withdraw", "death", "exile"].includes(state.view)) return;
+      if (!state.currentRoomId || !AUTO_REFRESH_VIEWS.includes(state.view)) return;
       refreshRemoteRoom()
         .then(render)
         .catch(() => {});
