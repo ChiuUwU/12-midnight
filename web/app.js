@@ -257,6 +257,7 @@
       sheriffWithdrawn: [],
       sheriffVoteRecord: null,
       sheriffBadge: { holderSeat: 0, lost: false },
+      dayVoteRecord: null,
       deathRecords: [],
       exileRecords: []
     };
@@ -333,6 +334,38 @@
 
   function latestRecord(records) {
     return records && records.length ? records[records.length - 1] : null;
+  }
+
+  function getAliveSeats(room) {
+    const aliveAssignments = (room.assignments || []).filter((assignment) => assignment.alive !== false);
+    if (aliveAssignments.length) return aliveAssignments.map((assignment) => assignment.seat).sort((a, b) => a - b);
+    return room.seats.map((seat) => seat.seat);
+  }
+
+  function calculateDayVote({ room, round, votes, pkSeats }) {
+    const aliveSeats = getAliveSeats(room);
+    const allowedTargets = round === 1 ? aliveSeats : pkSeats.filter((seat) => aliveSeats.includes(seat));
+    const counts = {};
+    allowedTargets.forEach((seat) => { counts[seat] = 0; });
+    votes.forEach((vote) => {
+      const targetSeat = Number(vote.targetSeat);
+      if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
+    });
+    const maxVotes = Math.max(0, ...Object.values(counts));
+    const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
+    const exiledSeat = topSeats.length === 1 ? topSeats[0] : 0;
+    const noExile = !exiledSeat && (round === 2 || topSeats.length === 0);
+    return {
+      day: room.night,
+      round,
+      votes,
+      counts,
+      topSeats,
+      pkSeats: round === 1 && topSeats.length > 1 ? topSeats : [],
+      exiledSeat,
+      noExile,
+      createdAt: Date.now()
+    };
   }
 
   function getRole(roleId) {
@@ -659,6 +692,7 @@
     const sheriffActive = sheriffCandidates.filter((seat) => !sheriffWithdrawn.includes(seat));
     const sheriffVote = room.sheriffVoteRecord;
     const sheriffBadge = room.sheriffBadge || { holderSeat: 0, lost: false };
+    const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
 
     app.innerHTML = `
       ${pageHeader(`房间 ${room.id}`, `${board.name} · ${room.mode === "JUDGE" ? "有法官" : "无法官"} · ${getPhaseName(room.phase)}`)}
@@ -704,6 +738,7 @@
       <section class="panel">
         <div class="label">白天放逐</div>
         <div class="body-text">${latestExile ? `第 ${latestExile.day} 天：${latestExile.noExile ? "无人出局" : `${latestExile.seat}号出局`}` : "暂未记录"}</div>
+        <div class="notice">投票状态：${dayVote ? dayVote.exiledSeat ? `${dayVote.exiledSeat}号出局` : dayVote.noExile ? "无人出局" : dayVote.pkSeats && dayVote.pkSeats.length ? `${formatSeatList(dayVote.pkSeats)} 平票 PK` : "未产生结果" : "暂未投票"}</div>
       </section>
       ${gameOver ? '<section class="panel"><div class="value">游戏已结束</div><div class="notice">可以进入复盘查看身份和操作记录。</div></section>' : ""}
       <section class="seat-grid">
@@ -720,7 +755,8 @@
       ${room.phase === "DAY" && room.night === 1 && isJudge && sheriffActive.length ? '<button class="button" data-action="view" data-view="sheriffVote">记录警徽投票</button>' : ""}
       ${!gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : ""}
       ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : ""}
-      ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="exile">记录白天放逐</button>' : ""}
+      ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : ""}
+      ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : ""}
       ${room.phase === "DAY" && isJudge ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : ""}
       ${room.phase === "NIGHT" && isJudge ? '<button class="button primary" data-action="view" data-view="night">继续夜间流程</button>' : ""}
       ${(room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="judge">法官总览</button>' : ""}
@@ -729,7 +765,7 @@
       ${!gameOver && room.phase !== "WAITING" && isJudge ? '<button class="button danger" data-action="game-end">结束游戏</button>' : ""}
       ${IS_REMOTE ? '<button class="button" data-action="refresh-room">刷新房间</button>' : ""}
       <button class="button danger" data-action="reset">${IS_REMOTE ? "退出当前房间" : "重置本地数据"}</button>
-      <div class="notice">${IS_REMOTE ? "联机版数据保存在当前电脑的本地服务里。关闭服务后房间会消失。" : "静态版数据只保存在当前浏览器。真正跨手机加入房间需要后端同步。"}</div>
+      <div class="notice">${IS_REMOTE ? "联机版会使用当前网址的后端同步房间。localhost 是本机服务，Cloudflare Pages 是线上服务。" : "静态版数据只保存在当前浏览器。真正跨手机加入房间需要后端同步。"}</div>
     `;
   }
 
@@ -969,6 +1005,42 @@
     `;
   }
 
+  function renderDayVote() {
+    const room = getCurrentRoom();
+    if (!room) return setView("home");
+    const isJudge = !IS_REMOTE || room.isJudge;
+    if (!isJudge) return setView("room");
+    const previous = room.dayVoteRecord;
+    const secondRound = previous && previous.day === room.night && previous.pkSeats && previous.pkSeats.length > 1 && !previous.exiledSeat && !previous.noExile;
+    const aliveSeats = getAliveSeats(room);
+    const targets = secondRound ? previous.pkSeats : aliveSeats;
+    const voters = secondRound ? aliveSeats.filter((seat) => !targets.includes(seat)) : aliveSeats;
+
+    app.innerHTML = `
+      ${pageHeader(secondRound ? "放逐 PK 投票" : "放逐投票", secondRound ? `PK 玩家：${formatSeatList(targets)}。除 PK 玩家外投第二轮。` : "记录白天投票，平票进入 PK，二轮再平票无人出局。")}
+      <section class="panel">
+        <div class="label">可投目标</div>
+        <div class="body-text">${formatSeatList(targets)}</div>
+      </section>
+      <section class="panel">
+        <div class="label">逐个记录投票</div>
+        <div class="list">
+          ${voters.map((seat) => `
+            <label class="list-item">
+              <span class="value">${seat}号</span>
+              <select class="select day-vote-select" data-voter="${seat}">
+                <option value="0">弃票/未投</option>
+                ${targets.map((targetSeat) => `<option value="${targetSeat}">${targetSeat}号</option>`).join("")}
+              </select>
+            </label>
+          `).join("")}
+        </div>
+      </section>
+      <button class="button primary" data-action="day-vote-submit" data-round="${secondRound ? 2 : 1}">确认放逐投票</button>
+      <button class="button" data-action="view" data-view="room">返回房间</button>
+    `;
+  }
+
   function renderBadge() {
     const room = getCurrentRoom();
     if (!room) return setView("home");
@@ -1057,9 +1129,10 @@
       <section class="panel">
         <div class="label">死亡与放逐</div>
         <div class="list">
+          ${room.dayVoteRecord ? `<div class="list-item"><div><div class="value">第 ${room.dayVoteRecord.day} 天放逐投票</div><div class="label">${room.dayVoteRecord.exiledSeat ? `${room.dayVoteRecord.exiledSeat}号出局` : room.dayVoteRecord.noExile ? "无人出局" : room.dayVoteRecord.pkSeats && room.dayVoteRecord.pkSeats.length ? `${formatSeatList(room.dayVoteRecord.pkSeats)} 平票 PK` : "未产生结果"}</div></div></div>` : ""}
           ${(room.deathRecords || []).map((record) => `<div class="list-item"><div><div class="value">第 ${record.day} 天死亡</div><div class="label">${formatSeatList(record.seats)}</div></div></div>`).join("")}
           ${(room.exileRecords || []).map((record) => `<div class="list-item"><div><div class="value">第 ${record.day} 天放逐</div><div class="label">${record.noExile ? "无人出局" : `${record.seat}号`}</div></div></div>`).join("")}
-          ${!(room.deathRecords || []).length && !(room.exileRecords || []).length ? '<div class="empty">暂无记录</div>' : ""}
+          ${!room.dayVoteRecord && !(room.deathRecords || []).length && !(room.exileRecords || []).length ? '<div class="empty">暂无记录</div>' : ""}
         </div>
       </section>
       <section class="panel">
@@ -1086,6 +1159,7 @@
     if (state.view === "withdraw") return renderWithdraw();
     if (state.view === "sheriffVote") return renderSheriffVote();
     if (state.view === "death") return renderDeathRecord();
+    if (state.view === "dayVote") return renderDayVote();
     if (state.view === "exile") return renderExileRecord();
     if (state.view === "badge") return renderBadge();
     if (state.view === "judge") return renderJudge();
@@ -1402,6 +1476,51 @@
         room.deathRecords = room.deathRecords || [];
         room.deathRecords.push(record);
         writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
+        state.view = "room";
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "day-vote-submit" && room) {
+      const round = Number(target.dataset.round || 1);
+      const previous = room.dayVoteRecord;
+      const votes = Array.from(app.querySelectorAll(".day-vote-select")).map((select) => ({
+        voterSeat: Number(select.dataset.voter),
+        targetSeat: Number(select.value)
+      }));
+      const pkSeats = previous && previous.day === room.night && previous.pkSeats ? previous.pkSeats : [];
+      try {
+        if (IS_REMOTE) {
+          await remotePost("day-vote", { round, votes, pkSeats });
+          state.view = "room";
+          saveState();
+          render();
+          return;
+        }
+
+        const record = calculateDayVote({ room, round, votes, pkSeats });
+        room.dayVoteRecord = record;
+        if (record.exiledSeat || record.noExile) {
+          if (record.exiledSeat) {
+            const assignment = room.assignments.find((item) => item.seat === record.exiledSeat);
+            if (assignment) assignment.alive = false;
+          }
+          const exileRecord = {
+            day: room.night,
+            seat: record.exiledSeat,
+            noExile: record.noExile,
+            source: "DAY_VOTE",
+            createdAt: Date.now()
+          };
+          room.exileRecords = room.exileRecords || [];
+          room.exileRecords.push(exileRecord);
+          writeLog(room, "EXILE_CONFIRMED", exileRecord);
+        }
+        writeLog(room, "DAY_VOTE_CONFIRMED", record);
         state.view = "room";
         saveState();
         render();

@@ -21,6 +21,8 @@
 - [规则数据结构草案](./docs/rule-data-structure-v0.1.md)
 - [页面流程](./docs/app-flow-v0.1.md)
 - [MVP 开发清单](./docs/mvp-build-plan-v0.1.md)
+- [Cloudflare 免费部署](./docs/cloudflare-deploy.md)
+- [项目交接文档](./docs/handoff.md)
 
 ## 第一版固定版型
 
@@ -43,6 +45,7 @@
 
 - 直接打开 `web/index.html`：本地演示模式，数据只保存在当前浏览器。
 - 双击 `start-web-server.cmd` 后打开 `http://localhost:5173`：本地联机模式，支持同一台电脑服务下多设备加入同一个房间。
+- 部署到 Cloudflare Pages + D1：线上免费联机模式，手机不需要和电脑在同一个 Wi-Fi，部署步骤见 [Cloudflare 免费部署](./docs/cloudflare-deploy.md)。
 
 本地测试流程：
 

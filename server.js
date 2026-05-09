@@ -157,9 +157,47 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     sheriffWithdrawn: room.sheriffWithdrawn || [],
     sheriffVoteRecord: room.sheriffVoteRecord || null,
     sheriffBadge: room.sheriffBadge || { holderSeat: 0, lost: false },
+    dayVoteRecord: room.dayVoteRecord || null,
     judgeCode: judge ? room.judgeCode : "",
     deathRecords: room.deathRecords || [],
     exileRecords: room.exileRecords || []
+  };
+}
+
+function getAliveSeats(room) {
+  const aliveAssignments = (room.assignments || []).filter((assignment) => assignment.alive !== false);
+  if (aliveAssignments.length) return aliveAssignments.map((assignment) => assignment.seat).sort((a, b) => a - b);
+  return room.seats.map((seat) => seat.seat);
+}
+
+function calculateDayVote(room, body) {
+  const round = Number(body.round || 1);
+  const aliveSeats = getAliveSeats(room);
+  const pkSeats = Array.isArray(body.pkSeats)
+    ? body.pkSeats.map(Number).filter((seat) => aliveSeats.includes(seat))
+    : [];
+  const allowedTargets = round === 1 ? aliveSeats : pkSeats;
+  const votes = Array.isArray(body.votes) ? body.votes : [];
+  const counts = {};
+  allowedTargets.forEach((seat) => { counts[seat] = 0; });
+  votes.forEach((vote) => {
+    const targetSeat = Number(vote.targetSeat);
+    if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
+  });
+  const maxVotes = Math.max(0, ...Object.values(counts));
+  const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
+  const exiledSeat = topSeats.length === 1 ? topSeats[0] : 0;
+  const noExile = !exiledSeat && (round === 2 || topSeats.length === 0);
+  return {
+    day: room.night,
+    round,
+    votes,
+    counts,
+    topSeats,
+    pkSeats: round === 1 && topSeats.length > 1 ? topSeats : [],
+    exiledSeat,
+    noExile,
+    createdAt: Date.now()
   };
 }
 
@@ -201,6 +239,7 @@ async function handleApi(request, response, url) {
       sheriffWithdrawn: [],
       sheriffVoteRecord: null,
       sheriffBadge: { holderSeat: 0, lost: false },
+      dayVoteRecord: null,
       deathRecords: [],
       exileRecords: []
     };
@@ -401,6 +440,32 @@ async function handleApi(request, response, url) {
     };
     room.deathRecords.push(record);
     writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
+    return sendJson(response, 200, {
+      room: sanitizeRoom(room, { clientId, judgeToken })
+    });
+  }
+
+  if (target.action === "day-vote") {
+    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录放逐投票");
+    if (room.phase !== "DAY") return sendError(response, 400, "当前阶段不能记录放逐投票");
+    const record = calculateDayVote(room, body);
+    room.dayVoteRecord = record;
+    if (record.exiledSeat || record.noExile) {
+      if (record.exiledSeat) {
+        const assignment = room.assignments.find((item) => item.seat === record.exiledSeat);
+        if (assignment) assignment.alive = false;
+      }
+      const exileRecord = {
+        day: room.night,
+        seat: record.exiledSeat,
+        noExile: record.noExile,
+        source: "DAY_VOTE",
+        createdAt: Date.now()
+      };
+      room.exileRecords.push(exileRecord);
+      writeLog(room, "EXILE_CONFIRMED", exileRecord);
+    }
+    writeLog(room, "DAY_VOTE_CONFIRMED", record);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
