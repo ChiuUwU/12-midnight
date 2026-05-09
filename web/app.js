@@ -187,7 +187,7 @@
     } else if (boardId === "mechanical_wolf_spirit_medium") {
       steps.push(
         { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
-        { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: false },
+        { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
         { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true },
         { id: "witch_antidote", actor: "witch", label: "女巫选择是否救人", targetCount: 1, allowSkip: true },
         { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
@@ -433,6 +433,63 @@
     };
     const item = map[log.type] || [log.type, fallback];
     return { title: item[0], detail: item[1] || "" };
+  }
+
+  function pushTimelineItem(groups, key, title, detail) {
+    if (!detail) return;
+    if (!groups[key]) groups[key] = { title, items: [] };
+    groups[key].items.push(detail);
+  }
+
+  function buildReviewTimeline(room) {
+    const groups = {};
+    (room.nightActions || []).forEach((action) => {
+      const detail = `${action.label || "夜间行动"}${action.skipped ? "：空过" : action.cardRoleId ? `：选择 ${getRole(action.cardRoleId).name}` : action.targetSeats && action.targetSeats.length ? `：${formatSeatList(action.targetSeats)}` : ""}`;
+      pushTimelineItem(groups, `night-${action.night}`, `第 ${action.night} 天夜晚`, detail);
+    });
+    (room.deathRecords || []).forEach((record) => {
+      pushTimelineItem(groups, `day-${record.day}`, `第 ${record.day} 天白天`, `天亮死亡：${record.seats && record.seats.length ? formatSeatList(record.seats) : "平安夜"}`);
+    });
+    if (room.sheriffCandidates && room.sheriffCandidates.length) {
+      pushTimelineItem(groups, "day-1", "第 1 天白天", `上警玩家：${formatSeatList(room.sheriffCandidates)}`);
+    }
+    if (room.sheriffWithdrawn && room.sheriffWithdrawn.length) {
+      pushTimelineItem(groups, "day-1", "第 1 天白天", `退水玩家：${formatSeatList(room.sheriffWithdrawn)}`);
+    }
+    if (room.sheriffVoteRecord) {
+      const record = room.sheriffVoteRecord;
+      const detail = record.electedSeat ? `警徽投票：${record.electedSeat}号当选` : record.badgeLost ? "警徽投票：警徽流失" : record.pkSeats && record.pkSeats.length ? `警徽投票：${formatSeatList(record.pkSeats)} 平票 PK` : "警徽投票：未产生警长";
+      pushTimelineItem(groups, "day-1", "第 1 天白天", detail);
+    }
+    if (room.dayVoteRecord) {
+      const record = room.dayVoteRecord;
+      const detail = record.exiledSeat ? `放逐投票：${record.exiledSeat}号出局` : record.noExile ? "放逐投票：无人出局" : record.pkSeats && record.pkSeats.length ? `放逐投票：${formatSeatList(record.pkSeats)} 平票 PK` : "放逐投票：未产生结果";
+      pushTimelineItem(groups, `day-${record.day}`, `第 ${record.day} 天白天`, detail);
+    }
+    (room.exileRecords || []).forEach((record) => {
+      if (record.source === "DAY_VOTE") return;
+      pushTimelineItem(groups, `day-${record.day}`, `第 ${record.day} 天白天`, `手动放逐：${record.noExile ? "无人出局" : `${record.seat}号出局`}`);
+    });
+    (room.logs || []).forEach((log) => {
+      const payload = log.payload || {};
+      if (log.type === "SHERIFF_BADGE_TRANSFERRED") {
+        pushTimelineItem(groups, `day-${room.night || 1}`, `第 ${room.night || 1} 天白天`, `警徽移交给 ${payload.seat}号`);
+      } else if (log.type === "SHERIFF_BADGE_DESTROYED") {
+        pushTimelineItem(groups, `day-${room.night || 1}`, `第 ${room.night || 1} 天白天`, "警徽撕毁");
+      } else if (log.type === "GAME_ENDED") {
+        pushTimelineItem(groups, "game-over", "游戏结束", "游戏已结束");
+      }
+    });
+    return Object.entries(groups)
+      .sort(([left], [right]) => {
+        const order = (key) => {
+          if (key === "game-over") return 9999;
+          const [, day] = key.split("-");
+          return Number(day) * 2 + (key.startsWith("day") ? 1 : 0);
+        };
+        return order(left) - order(right);
+      })
+      .map(([, group]) => group);
   }
 
   function flattenEntries(entries) {
@@ -1151,8 +1208,9 @@
     const room = getCurrentRoom();
     if (!room) return setView("home");
     const board = getBoard(room.boardId);
+    const timeline = buildReviewTimeline(room);
     app.innerHTML = `
-      ${pageHeader("复盘", `${board.name} · ${room.logs.length} 条记录`)}
+      ${pageHeader("复盘", board.name)}
       <section class="panel">
         <div class="label">身份表</div>
         <div class="list">
@@ -1175,31 +1233,16 @@
         </div>
       </section>
       <section class="panel">
-        <div class="label">操作记录</div>
+        <div class="label">流程摘要</div>
         <div class="list">
-          ${room.logs.length ? room.logs.map((log) => {
-            const item = formatLog(log);
-            return `<div class="list-item"><div><div class="value">${escapeHtml(item.title)}</div><div class="label">${escapeHtml(item.detail)}</div></div></div>`;
-          }).join("") : '<div class="empty">暂无记录</div>'}
-        </div>
-      </section>
-      <section class="panel">
-        <div class="label">死亡与放逐</div>
-        <div class="list">
-          ${room.dayVoteRecord ? `<div class="list-item"><div><div class="value">第 ${room.dayVoteRecord.day} 天放逐投票</div><div class="label">${room.dayVoteRecord.exiledSeat ? `${room.dayVoteRecord.exiledSeat}号出局` : room.dayVoteRecord.noExile ? "无人出局" : room.dayVoteRecord.pkSeats && room.dayVoteRecord.pkSeats.length ? `${formatSeatList(room.dayVoteRecord.pkSeats)} 平票 PK` : "未产生结果"}</div></div></div>` : ""}
-          ${(room.deathRecords || []).map((record) => `<div class="list-item"><div><div class="value">第 ${record.day} 天死亡</div><div class="label">${formatSeatList(record.seats)}</div></div></div>`).join("")}
-          ${(room.exileRecords || []).map((record) => `<div class="list-item"><div><div class="value">第 ${record.day} 天放逐</div><div class="label">${record.noExile ? "无人出局" : `${record.seat}号`}</div></div></div>`).join("")}
-          ${!room.dayVoteRecord && !(room.deathRecords || []).length && !(room.exileRecords || []).length ? '<div class="empty">暂无记录</div>' : ""}
-        </div>
-      </section>
-      <section class="panel">
-        <div class="label">警上记录</div>
-        <div class="list">
-          <div class="list-item"><div><div class="value">上警玩家</div><div class="label">${formatSeatList(room.sheriffCandidates || [])}</div></div></div>
-          <div class="list-item"><div><div class="value">已退水</div><div class="label">${formatSeatList(room.sheriffWithdrawn || [])}</div></div></div>
-          <div class="list-item"><div><div class="value">仍在警上</div><div class="label">${formatSeatList((room.sheriffCandidates || []).filter((seat) => !(room.sheriffWithdrawn || []).includes(seat)))}</div></div></div>
-          <div class="list-item"><div><div class="value">警徽结果</div><div class="label">${room.sheriffVoteRecord ? room.sheriffVoteRecord.electedSeat ? `${room.sheriffVoteRecord.electedSeat}号当选` : room.sheriffVoteRecord.badgeLost ? "警徽流失" : room.sheriffVoteRecord.pkSeats && room.sheriffVoteRecord.pkSeats.length ? `${formatSeatList(room.sheriffVoteRecord.pkSeats)} 平票 PK` : "未产生警长" : "暂未投票"}</div></div></div>
-          <div class="list-item"><div><div class="value">当前警长</div><div class="label">${room.sheriffBadge && room.sheriffBadge.holderSeat ? `${room.sheriffBadge.holderSeat}号` : room.sheriffBadge && room.sheriffBadge.lost ? "警徽流失" : "暂无"}</div></div></div>
+          ${timeline.length ? timeline.map((group) => `
+            <div class="list-item">
+              <div>
+                <div class="value">${group.title}</div>
+                <div class="label">${group.items.map(escapeHtml).join("；")}</div>
+              </div>
+            </div>
+          `).join("") : '<div class="empty">暂无流程记录</div>'}
         </div>
       </section>
       <button class="button" data-action="view" data-view="room">返回房间</button>
