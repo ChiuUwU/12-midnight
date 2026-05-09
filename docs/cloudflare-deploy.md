@@ -7,7 +7,7 @@
 - `web/`：静态网页，Cloudflare Pages 会直接发布这个目录。
 - `functions/api/rooms/[[path]].js`：线上 API，接口路径和本地 `server.js` 保持一致。
 - `db/schema.sql`：D1 数据库表结构。
-- `wrangler.toml`：Cloudflare 项目配置。
+Cloudflare Pages 的项目配置在后台填写；仓库里不放 `wrangler.toml`，这样 D1 绑定可以直接在后台添加。
 
 ## 第一次配置
 
