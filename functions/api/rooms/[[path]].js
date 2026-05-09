@@ -390,6 +390,23 @@ function calculateDayVote(room, body) {
   };
 }
 
+function validateNightAction(room, step, targetSeats, skipped) {
+  if (skipped) return "";
+  if (step.id === "guard_guard") {
+    const lastGuard = [...(room.nightActions || [])]
+      .reverse()
+      .find((action) => action.stepId === "guard_guard" && action.night === room.night - 1 && !action.skipped);
+    if (lastGuard && lastGuard.targetSeats && lastGuard.targetSeats[0] === targetSeats[0]) {
+      return "守卫不能连续两晚守护同一名玩家";
+    }
+  }
+  if (step.id === "witch_antidote" || step.id === "witch_poison") {
+    const used = (room.nightActions || []).some((action) => action.stepId === step.id && !action.skipped);
+    if (used) return step.id === "witch_antidote" ? "女巫解药已经使用过" : "女巫毒药已经使用过";
+  }
+  return "";
+}
+
 async function handleCreateRoom(request, env) {
   const body = await readBody(request);
   if (!body.clientId) return error(400, "缺少 clientId");
@@ -518,6 +535,8 @@ async function handleRoomAction(request, env, route) {
     if (!skipped && !step.needsCard && targetSeats.length !== step.targetCount) return error(400, `需要选择 ${step.targetCount} 个目标`);
     if (skipped && !step.allowSkip) return error(400, "这个步骤不能跳过");
     if (step.needsCard && !cardRoleId) return error(400, "需要选择一张盗宝牌");
+    const ruleError = validateNightAction(room, step, targetSeats, skipped);
+    if (ruleError) return error(400, ruleError);
     const record = {
       night: room.night,
       stepId: step.id,

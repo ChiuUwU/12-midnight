@@ -201,6 +201,23 @@ function calculateDayVote(room, body) {
   };
 }
 
+function validateNightAction(room, step, targetSeats, skipped) {
+  if (skipped) return "";
+  if (step.id === "guard_guard") {
+    const lastGuard = [...(room.nightActions || [])]
+      .reverse()
+      .find((action) => action.stepId === "guard_guard" && action.night === room.night - 1 && !action.skipped);
+    if (lastGuard && lastGuard.targetSeats && lastGuard.targetSeats[0] === targetSeats[0]) {
+      return "守卫不能连续两晚守护同一名玩家";
+    }
+  }
+  if (step.id === "witch_antidote" || step.id === "witch_poison") {
+    const used = (room.nightActions || []).some((action) => action.stepId === step.id && !action.skipped);
+    if (used) return step.id === "witch_antidote" ? "女巫解药已经使用过" : "女巫毒药已经使用过";
+  }
+  return "";
+}
+
 function getRoomFromPath(urlPath) {
   const match = urlPath.match(/^\/api\/rooms\/(\d{6})(?:\/([^/]+))?$/);
   if (!match) return null;
@@ -548,6 +565,8 @@ async function handleApi(request, response, url) {
     if (step.needsCard && !cardRoleId) {
       return sendError(response, 400, "需要选择一张盗宝牌");
     }
+    const ruleError = validateNightAction(room, step, targetSeats, skipped);
+    if (ruleError) return sendError(response, 400, ruleError);
 
     const actionRecord = {
       night: room.night,

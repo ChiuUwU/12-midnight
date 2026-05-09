@@ -368,6 +368,23 @@
     };
   }
 
+  function validateNightAction(room, step, targetSeats, skipped) {
+    if (skipped) return "";
+    if (step.id === "guard_guard") {
+      const lastGuard = [...(room.nightActions || [])]
+        .reverse()
+        .find((action) => action.stepId === "guard_guard" && action.night === room.night - 1 && !action.skipped);
+      if (lastGuard && lastGuard.targetSeats && lastGuard.targetSeats[0] === targetSeats[0]) {
+        return "守卫不能连续两晚守护同一名玩家";
+      }
+    }
+    if (step.id === "witch_antidote" || step.id === "witch_poison") {
+      const used = (room.nightActions || []).some((action) => action.stepId === step.id && !action.skipped);
+      if (used) return step.id === "witch_antidote" ? "女巫解药已经使用过" : "女巫毒药已经使用过";
+    }
+    return "";
+  }
+
   function getRole(roleId) {
     return ROLES[roleId];
   }
@@ -1279,6 +1296,11 @@
       }
       if (!skipped && step.needsCard && !cardRoleId) {
         window.alert("需要选择一张盗宝牌");
+        return;
+      }
+      const ruleError = validateNightAction(room, step, targetSeats, skipped);
+      if (ruleError) {
+        window.alert(ruleError);
         return;
       }
 
