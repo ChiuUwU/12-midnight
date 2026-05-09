@@ -3,6 +3,7 @@
   const app = document.querySelector("#app");
   const IS_REMOTE = location.protocol === "http:" || location.protocol === "https:";
   const AUTO_REFRESH_VIEWS = ["room", "identity", "judge", "review"];
+  const PRELOAD_IMAGES = ["assets/app-icon.png"];
 
   const DEFAULT_RULES = {
     winCondition: "KILL_SIDE",
@@ -144,10 +145,13 @@
   };
 
   function preloadRoleImages() {
-    Object.values(ROLES).forEach((role) => {
-      if (!role.image) return;
+    const urls = [
+      ...PRELOAD_IMAGES,
+      ...Object.values(ROLES).map((role) => role.image).filter(Boolean)
+    ];
+    [...new Set(urls)].forEach((url) => {
       const image = new Image();
-      image.src = role.image;
+      image.src = url;
     });
   }
 
