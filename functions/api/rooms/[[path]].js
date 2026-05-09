@@ -13,6 +13,8 @@ const DEFAULT_RULES = {
   tieRule: "PK_THEN_NO_OUT_ON_SECOND_TIE"
 };
 
+const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
+
 const BOARDS = [
   {
     id: "pre_witch_hunter_idiot_mixed",
@@ -282,17 +284,28 @@ async function readBody(request) {
 }
 
 async function loadRoom(env, roomId) {
-  const row = await env.DB.prepare("SELECT data FROM rooms WHERE id = ?").bind(roomId).first();
-  return row ? JSON.parse(row.data) : null;
+  const row = await env.DB.prepare("SELECT data, updated_at FROM rooms WHERE id = ?").bind(roomId).first();
+  if (!row) return null;
+  if (Date.now() - Number(row.updated_at || 0) > ROOM_TTL_MS) {
+    await env.DB.prepare("DELETE FROM rooms WHERE id = ?").bind(roomId).run();
+    return null;
+  }
+  return JSON.parse(row.data);
 }
 
 async function saveRoom(env, room) {
   const now = Date.now();
+  room.createdAt = room.createdAt || now;
+  room.updatedAt = now;
   const data = JSON.stringify(room);
   await env.DB.prepare(
     "INSERT INTO rooms (id, data, created_at, updated_at) VALUES (?, ?, ?, ?) " +
     "ON CONFLICT(id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at"
-  ).bind(room.id, data, room.createdAt || now, now).run();
+  ).bind(room.id, data, room.createdAt, now).run();
+}
+
+async function cleanupExpiredRooms(env) {
+  await env.DB.prepare("DELETE FROM rooms WHERE updated_at < ?").bind(Date.now() - ROOM_TTL_MS).run();
 }
 
 async function createRoomId(env) {
@@ -408,6 +421,7 @@ function validateNightAction(room, step, targetSeats, skipped) {
 }
 
 async function handleCreateRoom(request, env) {
+  await cleanupExpiredRooms(env);
   const body = await readBody(request);
   if (!body.clientId) return error(400, "缺少 clientId");
   if (!body.boardId) return error(400, "缺少 boardId");

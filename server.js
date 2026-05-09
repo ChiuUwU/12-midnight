@@ -8,6 +8,7 @@ const { dealBoard } = require("./miniprogram/utils/deal");
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || "0.0.0.0";
 const WEB_ROOT = path.join(__dirname, "web");
+const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
 const rooms = new Map();
 
 function createSeats() {
@@ -20,6 +21,7 @@ function createSeats() {
 }
 
 function createRoomId() {
+  cleanupExpiredRooms();
   let id = "";
   do {
     id = String(Math.floor(100000 + Math.random() * 900000));
@@ -32,11 +34,22 @@ function createJudgeCode() {
 }
 
 function writeLog(room, type, payload) {
+  room.updatedAt = Date.now();
   room.logs.push({
     id: `${Date.now()}-${room.logs.length}`,
     type,
     payload,
     createdAt: Date.now()
+  });
+}
+
+function isRoomExpired(room) {
+  return Boolean(room && Date.now() - Number(room.updatedAt || room.createdAt || 0) > ROOM_TTL_MS);
+}
+
+function cleanupExpiredRooms() {
+  rooms.forEach((room, roomId) => {
+    if (isRoomExpired(room)) rooms.delete(roomId);
   });
 }
 
@@ -222,6 +235,14 @@ function getRoomFromPath(urlPath) {
   const match = urlPath.match(/^\/api\/rooms\/(\d{6})(?:\/([^/]+))?$/);
   if (!match) return null;
   const room = rooms.get(match[1]);
+  if (isRoomExpired(room)) {
+    rooms.delete(match[1]);
+    return {
+      roomId: match[1],
+      action: match[2] || "",
+      room: null
+    };
+  }
   return {
     roomId: match[1],
     action: match[2] || "",
@@ -258,7 +279,9 @@ async function handleApi(request, response, url) {
       sheriffBadge: { holderSeat: 0, lost: false },
       dayVoteRecord: null,
       deathRecords: [],
-      exileRecords: []
+      exileRecords: [],
+      createdAt: Date.now(),
+      updatedAt: Date.now()
     };
     rooms.set(room.id, room);
     writeLog(room, "ROOM_CREATED", { mode: room.mode, boardId: room.boardId });

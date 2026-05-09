@@ -143,6 +143,14 @@
     guard: "盾"
   };
 
+  function preloadRoleImages() {
+    Object.values(ROLES).forEach((role) => {
+      if (!role.image) return;
+      const image = new Image();
+      image.src = role.image;
+    });
+  }
+
   function createNightSteps(boardId, night) {
     const firstNight = night === 1;
     const steps = [];
@@ -397,6 +405,34 @@
       payload,
       createdAt: Date.now()
     });
+  }
+
+  function formatLog(log) {
+    const payload = log.payload || {};
+    const seats = (value) => formatSeatList(Array.isArray(value) ? value : []);
+    const roleName = (roleId) => roleId ? (getRole(roleId) || { name: roleId }).name : "";
+    const fallback = escapeHtml(JSON.stringify(payload));
+    const map = {
+      ROOM_CREATED: ["创建房间", "房间已创建"],
+      SEAT_SELECTED: ["选择座位", `${payload.seat || ""}号入座`],
+      TEST_SEATS_FILLED: ["补齐测试座位", "空位已用测试玩家补齐"],
+      DEALT: ["发牌", "身份牌已随机发放"],
+      IDENTITY_VIEWED: ["查看身份", `${payload.seat || ""}号已查看身份`],
+      NIGHT_STARTED: ["开始夜晚", `第 ${payload.night || ""} 夜开始`],
+      NIGHT_FINISHED: ["结束夜晚", `第 ${payload.night || ""} 夜结束，进入白天`],
+      NIGHT_ACTION: ["夜间行动", `${payload.label || "记录行动"}${payload.skipped ? "：跳过" : payload.targetSeats && payload.targetSeats.length ? `：${seats(payload.targetSeats)}` : payload.cardRoleId ? `：选择 ${roleName(payload.cardRoleId)}` : ""}`],
+      SHERIFF_CANDIDATES_CONFIRMED: ["上警名单", seats(payload.seats)],
+      SHERIFF_WITHDRAW_CONFIRMED: ["退水名单", seats(payload.seats)],
+      SHERIFF_VOTE_CONFIRMED: ["警徽投票", payload.electedSeat ? `${payload.electedSeat}号当选警长` : payload.badgeLost ? "警徽流失" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生警长"],
+      DAYBREAK_DEATHS_CONFIRMED: ["天亮死亡", payload.seats && payload.seats.length ? seats(payload.seats) : "平安夜"],
+      DAY_VOTE_CONFIRMED: ["放逐投票", payload.exiledSeat ? `${payload.exiledSeat}号出局` : payload.noExile ? "无人出局" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生结果"],
+      EXILE_CONFIRMED: ["白天放逐", payload.noExile ? "无人出局" : `${payload.seat || ""}号出局`],
+      SHERIFF_BADGE_TRANSFERRED: ["警徽移交", `警徽移交给 ${payload.seat || ""}号`],
+      SHERIFF_BADGE_DESTROYED: ["撕毁警徽", "警徽已撕毁"],
+      GAME_ENDED: ["结束游戏", "游戏已结束"]
+    };
+    const item = map[log.type] || [log.type, fallback];
+    return { title: item[0], detail: item[1] || "" };
   }
 
   function flattenEntries(entries) {
@@ -1141,7 +1177,10 @@
       <section class="panel">
         <div class="label">操作记录</div>
         <div class="list">
-          ${room.logs.length ? room.logs.map((log) => `<div class="list-item"><div><div class="value">${escapeHtml(log.type)}</div><div class="label">${escapeHtml(JSON.stringify(log.payload || {}))}</div></div></div>`).join("") : '<div class="empty">暂无记录</div>'}
+          ${room.logs.length ? room.logs.map((log) => {
+            const item = formatLog(log);
+            return `<div class="list-item"><div><div class="value">${escapeHtml(item.title)}</div><div class="label">${escapeHtml(item.detail)}</div></div></div>`;
+          }).join("") : '<div class="empty">暂无记录</div>'}
         </div>
       </section>
       <section class="panel">
@@ -1755,6 +1794,8 @@
       render();
     }
   });
+
+  preloadRoleImages();
 
   if (IS_REMOTE && state.currentRoomId) {
     refreshRemoteRoom()
