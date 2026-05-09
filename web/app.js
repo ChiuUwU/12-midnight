@@ -621,7 +621,7 @@
     app.innerHTML = `
       <section class="home-hero">
         <div class="hero-art">
-          <img class="app-icon" src="assets/app-icon.png" alt="十二点天黑" />
+          <img class="app-icon" src="assets/app-icon.png" alt="以上皆狼" />
           <div class="clock-ring" aria-hidden="true">
             <span></span>
             <span></span>
@@ -630,7 +630,7 @@
           </div>
         </div>
         <div class="hero-copy">
-          <div class="eyebrow">十二点天黑</div>
+          <div class="eyebrow">以上皆狼</div>
           <div class="brand-title">入夜开局</div>
           <div class="brand-subtitle">选座、发牌、看身份，一桌狼人杀从这里开始。</div>
         </div>
