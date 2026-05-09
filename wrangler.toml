@@ -1,9 +1,3 @@
 name = "12-midnight"
 compatibility_date = "2026-05-09"
 pages_build_output_dir = "web"
-
-[[d1_databases]]
-binding = "DB"
-database_name = "12-midnight"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
-

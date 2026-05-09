@@ -12,32 +12,26 @@
 ## 第一次配置
 
 1. 进入 Cloudflare Dashboard，打开 Workers & Pages。
-2. 创建一个 D1 数据库，名字建议填 `12-midnight`。
-3. 把 D1 数据库的 `database_id` 复制到 `wrangler.toml`，替换：
-
-```toml
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
-```
-
-4. 初始化数据库表。可以在 Cloudflare D1 控制台里执行 `db/schema.sql` 的内容，也可以在项目目录执行：
-
-```bash
-npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
-```
-
-5. 创建 Pages 项目并连接 GitHub 仓库 `ChiuUwU/12-midnight`。
-6. Pages 构建设置：
+2. 创建 Pages 项目并连接 GitHub 仓库 `ChiuUwU/12-midnight`。
+3. Pages 构建设置：
 
 - Framework preset：None
 - Build command：留空
 - Build output directory：`web`
 
-7. 在 Pages 项目的 Settings -> Functions -> D1 database bindings 里绑定：
+4. 创建一个 D1 数据库，名字建议填 `12-midnight`。
+5. 初始化数据库表。可以在 Cloudflare D1 控制台里执行 `db/schema.sql` 的内容，也可以在项目目录执行：
+
+```bash
+npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
+```
+
+6. 在 Pages 项目的 Settings -> Functions -> D1 database bindings 里绑定：
 
 - Variable name：`DB`
 - D1 database：`12-midnight`
 
-8. 重新部署 Pages。
+7. 重新部署 Pages。
 
 ## 部署后怎么用
 
