@@ -374,20 +374,35 @@ function getAliveSeats(room) {
   return room.seats.map((seat) => seat.seat);
 }
 
+function normalizeVoteCounts(allowedTargets, rawCounts = {}) {
+  const counts = {};
+  allowedTargets.forEach((seat) => {
+    counts[seat] = Math.max(0, Number(rawCounts[seat] || rawCounts[String(seat)] || 0));
+  });
+  return counts;
+}
+
+function applyVoteList(counts, allowedTargets, votes) {
+  votes.forEach((vote) => {
+    const targetSeat = Number(vote.targetSeat);
+    if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
+  });
+}
+
+function topSeatsFromCounts(counts) {
+  const maxVotes = Math.max(0, ...Object.values(counts));
+  return Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
+}
+
 function calculateDayVote(room, body) {
   const round = Number(body.round || 1);
   const aliveSeats = getAliveSeats(room);
   const pkSeats = uniqueSeats(body.pkSeats, aliveSeats);
   const allowedTargets = round === 1 ? aliveSeats : pkSeats;
   const votes = Array.isArray(body.votes) ? body.votes : [];
-  const counts = {};
-  allowedTargets.forEach((seat) => { counts[seat] = 0; });
-  votes.forEach((vote) => {
-    const targetSeat = Number(vote.targetSeat);
-    if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
-  });
-  const maxVotes = Math.max(0, ...Object.values(counts));
-  const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
+  const counts = normalizeVoteCounts(allowedTargets, body.counts);
+  applyVoteList(counts, allowedTargets, votes);
+  const topSeats = topSeatsFromCounts(counts);
   const exiledSeat = topSeats.length === 1 ? topSeats[0] : 0;
   const noExile = !exiledSeat && (round === 2 || topSeats.length === 0);
   return {
@@ -589,15 +604,10 @@ async function handleRoomAction(request, env, route) {
     const activeCandidates = candidates.filter((seat) => !withdrawn.includes(seat));
     const round = Number(body.round || 1);
     const allowedTargets = round === 1 ? activeCandidates : uniqueSeats(body.pkSeats, activeCandidates);
-    const counts = {};
-    allowedTargets.forEach((seat) => { counts[seat] = 0; });
     const votes = Array.isArray(body.votes) ? body.votes : [];
-    votes.forEach((vote) => {
-      const targetSeat = Number(vote.targetSeat);
-      if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
-    });
-    const maxVotes = Math.max(0, ...Object.values(counts));
-    const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
+    const counts = normalizeVoteCounts(allowedTargets, body.counts);
+    applyVoteList(counts, allowedTargets, votes);
+    const topSeats = topSeatsFromCounts(counts);
     const electedSeat = topSeats.length === 1 ? topSeats[0] : 0;
     const badgeLost = round === 2 && !electedSeat;
     const record = {
