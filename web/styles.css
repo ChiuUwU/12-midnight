@@ -331,6 +331,35 @@ select {
   opacity: 0.48;
 }
 
+.action-panel {
+  padding-bottom: 12px;
+}
+
+.action-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.action-row .button {
+  min-height: 42px;
+  margin-top: 0;
+}
+
+.action-row .button.danger {
+  grid-column: span 2;
+}
+
+.danger-zone {
+  border-color: rgba(143, 36, 26, 0.24);
+}
+
+.script-panel {
+  border-color: rgba(201, 155, 68, 0.42);
+  background: #fff7e7;
+}
+
 .field {
   display: grid;
   gap: 8px;

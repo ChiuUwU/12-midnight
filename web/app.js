@@ -505,8 +505,10 @@
       NIGHT_STARTED: ["开始夜晚", `第 ${payload.night || ""} 夜开始`],
       NIGHT_FINISHED: ["结束夜晚", `第 ${payload.night || ""} 夜结束，进入白天`],
       NIGHT_ACTION: ["夜间行动", `${payload.label || "记录行动"}${payload.skipped ? "：跳过" : payload.targetSeats && payload.targetSeats.length ? `：${seats(payload.targetSeats)}` : payload.cardRoleId ? `：选择 ${roleName(payload.cardRoleId)}` : ""}`],
+      NIGHT_ACTION_UNDONE: ["撤回夜间行动", payload.label || "已撤回上一步"],
       SHERIFF_CANDIDATES_CONFIRMED: ["上警名单", seats(payload.seats)],
       SHERIFF_WITHDRAW_CONFIRMED: ["退水名单", seats(payload.seats)],
+      SHERIFF_SELF_WITHDRAWN: ["玩家退水", `${payload.seat || ""}号退水`],
       SHERIFF_VOTE_CONFIRMED: ["警徽投票", payload.electedSeat ? `${payload.electedSeat}号当选警长` : payload.badgeLost ? "警徽流失" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生警长"],
       DAYBREAK_DEATHS_CONFIRMED: ["天亮死亡", payload.seats && payload.seats.length ? seats(payload.seats) : "平安夜"],
       DAY_VOTE_CONFIRMED: ["放逐投票", payload.exiledSeat ? `${payload.exiledSeat}号出局` : payload.noExile ? "无人出局" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生结果"],
@@ -517,6 +519,57 @@
     };
     const item = map[log.type] || [log.type, fallback];
     return { title: item[0], detail: item[1] || "" };
+  }
+
+  function renderActionPanel(title, actions, extraClass = "") {
+    const visibleActions = actions.filter(Boolean);
+    if (!visibleActions.length) return "";
+    return `
+      <section class="panel action-panel ${extraClass}">
+        <div class="label">${title}</div>
+        <div class="action-row">
+          ${visibleActions.join("")}
+        </div>
+      </section>
+    `;
+  }
+
+  function getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn }) {
+    if (!mySeat) return "还未选择座位";
+    const assignment = (room.assignments || []).find((item) => item.seat === mySeat.seat);
+    const parts = [`${mySeat.seat}号`];
+    if (assignment) parts.push(assignment.alive === false ? "已出局" : "存活");
+    if (sheriffCandidates.includes(mySeat.seat)) {
+      parts.push(sheriffWithdrawn.includes(mySeat.seat) ? "已退水" : "仍在警上");
+    } else if (room.phase !== "WAITING") {
+      parts.push("未上警");
+    }
+    return parts.join(" · ");
+  }
+
+  function getJudgeScript(step, room) {
+    if (!step) return "夜间行动已完成，法官确认死亡信息后可以天亮。";
+    const wolfAction = [...(room.nightActions || [])]
+      .reverse()
+      .find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
+    const killedSeat = wolfAction && wolfAction.targetSeats && wolfAction.targetSeats[0];
+    const scripts = {
+      mixed_blood_model: "混血儿请睁眼，请选择你的榜样。选择后闭眼。",
+      wolves_kill: "狼人请睁眼，请确认同伴，并选择今晚击杀目标；也可以空刀。选择后闭眼。",
+      witch_antidote: `女巫请睁眼，今晚死亡信息为${killedSeat ? `${killedSeat}号` : "无人"}，是否使用解药？选择后闭眼。`,
+      witch_poison: "女巫请继续操作，是否使用毒药？选择目标或空过后闭眼。",
+      seer_check: "预言家请睁眼，请查验一名玩家。法官线下告知阵营后，预言家闭眼。",
+      dancer_dance: "舞者请睁眼，请选择三名玩家进入舞池。选择后闭眼。",
+      mask_check: "假面请睁眼，请验证一名玩家是否在舞池中。记录后继续。",
+      mask_give: "假面请选择一名玩家给予面具。选择后闭眼。",
+      treasure_pick: "盗宝大师请睁眼，请从盗宝牌堆中选择今晚使用的身份牌。选择后闭眼。",
+      dreamer_dream: "摄梦人请睁眼，请选择今晚摄梦目标。选择后闭眼。",
+      poisoner_poison: "毒师请睁眼，是否使用毒药？选择目标或空过后闭眼。",
+      spirit_medium_check: "通灵师请睁眼，请查验一名存活玩家的具体身份。法官线下告知后闭眼。",
+      mechanical_mimic: "机械狼请睁眼，请选择今晚模仿的目标。记录后闭眼。",
+      guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。"
+    };
+    return scripts[step.id] || `${step.label}。记录完成后进入下一步。`;
   }
 
   function pushTimelineItem(groups, key, title, detail) {
@@ -890,6 +943,32 @@
     const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
     const suggestedDeaths = room.phase === "DAY" && isJudge ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
+    const mainActions = [
+      room.phase === "WAITING" ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : "",
+      room.phase === "DEALT" && isJudge ? '<button class="button primary" data-action="start-night">开始第一夜</button>' : "",
+      room.phase === "DAY" && room.night === 1 && isJudge ? '<button class="button" data-action="view" data-view="sheriff">记录上警</button>' : "",
+      room.phase === "DAY" && room.night === 1 && isJudge && sheriffCandidates.length ? '<button class="button" data-action="view" data-view="withdraw">记录退水</button>' : "",
+      canSelfWithdraw ? '<button class="button primary" data-action="self-withdraw">我要退水</button>' : "",
+      room.phase === "DAY" && room.night === 1 && isJudge && sheriffActive.length ? '<button class="button" data-action="view" data-view="sheriffVote">记录警徽投票</button>' : "",
+      !gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : "",
+      room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
+      room.phase === "DAY" && isJudge && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
+      room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : "",
+      room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : "",
+      room.phase === "DAY" && isJudge ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
+      room.phase === "NIGHT" && isJudge ? '<button class="button primary" data-action="view" data-view="night">继续夜间流程</button>' : "",
+      room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
+    ];
+    const infoActions = [
+      room.phase !== "WAITING" ? '<button class="button primary" data-action="view" data-view="identity">查看我的身份</button>' : "",
+      (room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="judge">法官总览</button>' : "",
+      (room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="review">复盘</button>' : "",
+      IS_REMOTE ? '<button class="button" data-action="refresh-room">刷新房间</button>' : ""
+    ];
+    const dangerActions = [
+      !gameOver && room.phase !== "WAITING" && isJudge ? '<button class="button danger" data-action="game-end">结束游戏</button>' : "",
+      `<button class="button danger" data-action="reset">${IS_REMOTE ? "退出当前房间" : "重置本地数据"}</button>`
+    ];
 
     app.innerHTML = `
       ${pageHeader(`房间 ${room.id}`, `${board.name} · ${room.mode === "JUDGE" ? "有法官" : "无法官"} · ${getPhaseName(room.phase)}`)}
@@ -919,6 +998,7 @@
           <div><div class="label">${isJudge && IS_REMOTE ? "当前身份" : "当前座位"}</div><div class="value">${isJudge && IS_REMOTE ? "法官席" : mySeat ? `${mySeat.seat}号` : "未选择"}</div></div>
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
+        <div class="notice">${isJudge ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
       </section>
       <section class="panel">
         <div class="label">上警玩家</div>
@@ -945,26 +1025,9 @@
           return `<button class="seat ${className}" data-action="choose-seat" data-seat="${seat.seat}" ${isJudge && IS_REMOTE ? "disabled" : ""}>${seat.seat}号</button>`;
         }).join("")}
       </section>
-      ${!gameOver ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : ""}
-      ${room.phase === "DEALT" || gameOver ? '<button class="button primary" data-action="view" data-view="identity">查看我的身份</button>' : ""}
-      ${room.phase === "DEALT" && isJudge ? '<button class="button primary" data-action="start-night">开始第一夜</button>' : ""}
-      ${room.phase === "DAY" && room.night === 1 && isJudge ? '<button class="button" data-action="view" data-view="sheriff">记录上警</button>' : ""}
-      ${room.phase === "DAY" && room.night === 1 && isJudge && sheriffCandidates.length ? '<button class="button" data-action="view" data-view="withdraw">记录退水</button>' : ""}
-      ${canSelfWithdraw ? '<button class="button primary" data-action="self-withdraw">我要退水</button>' : ""}
-      ${room.phase === "DAY" && room.night === 1 && isJudge && sheriffActive.length ? '<button class="button" data-action="view" data-view="sheriffVote">记录警徽投票</button>' : ""}
-      ${!gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : ""}
-      ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : ""}
-      ${room.phase === "DAY" && isJudge && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : ""}
-      ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : ""}
-      ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : ""}
-      ${room.phase === "DAY" && isJudge ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : ""}
-      ${room.phase === "NIGHT" && isJudge ? '<button class="button primary" data-action="view" data-view="night">继续夜间流程</button>' : ""}
-      ${(room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="judge">法官总览</button>' : ""}
-      ${(room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="review">复盘</button>' : ""}
-      ${room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""}
-      ${!gameOver && room.phase !== "WAITING" && isJudge ? '<button class="button danger" data-action="game-end">结束游戏</button>' : ""}
-      ${IS_REMOTE ? '<button class="button" data-action="refresh-room">刷新房间</button>' : ""}
-      <button class="button danger" data-action="reset">${IS_REMOTE ? "退出当前房间" : "重置本地数据"}</button>
+      ${renderActionPanel("当前操作", mainActions)}
+      ${renderActionPanel("查看信息", infoActions)}
+      ${renderActionPanel("系统操作", dangerActions, "danger-zone")}
       <div class="notice">${IS_REMOTE ? "联机版会使用当前网址的后端同步房间。localhost 是本机服务，Cloudflare Pages 是线上服务。" : "静态版数据只保存在当前浏览器。真正跨手机加入房间需要后端同步。"}</div>
     `;
   }
@@ -1062,6 +1125,11 @@
         </div>
       </section>
 
+      <section class="panel script-panel">
+        <div class="label">法官台词</div>
+        <div class="body-text">${getJudgeScript(step, room)}</div>
+      </section>
+
       ${step.needsCard ? `
         <section class="panel">
           <div class="label">选择盗宝牌</div>
@@ -1086,10 +1154,15 @@
         <div class="notice">${suggestedDeaths.length ? `当前建议死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}` : "当前建议死亡：无"}</div>
       </section>
 
-      <button class="button primary" data-action="night-submit">确认记录</button>
-      ${step.allowSkip ? '<button class="button" data-action="night-skip">空过</button>' : ""}
-      ${currentNightActions.length ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
-      <button class="button" data-action="view" data-view="room">返回房间</button>
+      <section class="panel action-panel">
+        <div class="label">本步操作</div>
+        <div class="action-row">
+          <button class="button primary" data-action="night-submit">确认记录</button>
+          ${step.allowSkip ? '<button class="button" data-action="night-skip">空过</button>' : ""}
+          ${currentNightActions.length ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
+          <button class="button" data-action="view" data-view="room">返回房间</button>
+        </div>
+      </section>
       <div class="notice">这一步只记录法官操作，暂不自动公布结果。</div>
     `;
   }
