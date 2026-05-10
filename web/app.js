@@ -390,19 +390,16 @@
       const action = source.find((item) => item.stepId === stepId && !item.skipped);
       return action && action.targetSeats && action.targetSeats.length ? action.targetSeats[0] : 0;
     };
+    const roleAtSeat = (seat) => {
+      const assignment = (room.assignments || []).find((item) => item.seat === seat);
+      return assignment ? assignment.roleId : "";
+    };
     const deaths = new Map();
-    const protectedBy = new Map();
     const addDeath = (seat, reason) => {
       if (!seat) return;
       const reasons = deaths.get(seat) || [];
       reasons.push(reason);
       deaths.set(seat, reasons);
-    };
-    const addProtection = (seat, reason) => {
-      if (!seat) return;
-      const reasons = protectedBy.get(seat) || [];
-      reasons.push(reason);
-      protectedBy.set(seat, reasons);
     };
 
     const wolfKill = firstTarget("wolves_kill");
@@ -412,14 +409,17 @@
     const guard = firstTarget("guard_guard");
     const dream = firstTarget("dreamer_dream");
     const previousDream = firstTarget("dreamer_dream", previousActions);
+    const mechanicalMimicSeat = firstTarget("mechanical_mimic");
+    const mechanicalMimicRole = roleAtSeat(mechanicalMimicSeat);
+    const mechanicalGuard = room.boardId === "mechanical_wolf_spirit_medium" && mechanicalMimicRole === "guard" ? guard : 0;
+    const witchPoisonImmuneRoles = room.boardId === "masquerade" ? ["dancer", "mask"] : [];
 
     addDeath(wolfKill, "狼刀");
-    addDeath(witchPoison, "女巫毒");
+    if (witchPoison && !witchPoisonImmuneRoles.includes(roleAtSeat(witchPoison))) {
+      addDeath(witchPoison, "女巫毒");
+    }
     addDeath(poisonerPoison, "毒师毒");
     if (dream && previousDream && dream === previousDream) addDeath(dream, "连续摄梦");
-
-    addProtection(guard, "守卫");
-    addProtection(dream, "摄梦");
 
     if (antidote && deaths.has(antidote)) {
       const reasons = deaths.get(antidote).filter((reason) => reason !== "狼刀");
@@ -428,16 +428,25 @@
     }
 
     const sameGuardAndSave = guard && antidote && wolfKill && guard === antidote && antidote === wolfKill;
-    protectedBy.forEach((reasons, seat) => {
-      if (sameGuardAndSave && seat === wolfKill) {
-        deaths.set(seat, ["同守同救"]);
-        return;
-      }
-      if (!deaths.has(seat)) return;
-      const remaining = deaths.get(seat).filter((reason) => !["狼刀", "女巫毒", "毒师毒"].includes(reason));
-      if (remaining.length) deaths.set(seat, remaining);
-      else deaths.delete(seat);
-    });
+    if (sameGuardAndSave) deaths.set(wolfKill, ["同守同救"]);
+
+    if (guard && deaths.has(guard) && !sameGuardAndSave) {
+      const removable = mechanicalGuard === guard ? ["狼刀", "女巫毒"] : ["狼刀"];
+      const remaining = deaths.get(guard).filter((reason) => !removable.includes(reason));
+      if (remaining.length) deaths.set(guard, remaining);
+      else deaths.delete(guard);
+    }
+
+    if (mechanicalGuard && witchPoison === mechanicalGuard) {
+      const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
+      addDeath(witchSeat, "机械守卫弹毒");
+    }
+
+    if (dream && deaths.has(dream)) {
+      const remaining = deaths.get(dream).filter((reason) => !["狼刀", "女巫毒", "毒师毒"].includes(reason));
+      if (remaining.length) deaths.set(dream, remaining);
+      else deaths.delete(dream);
+    }
 
     return [...deaths.entries()]
       .map(([seat, reasons]) => ({ seat, reasons }))
