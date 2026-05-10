@@ -357,43 +357,24 @@
     return room.seats.map((seat) => seat.seat);
   }
 
-  function normalizeVoteCounts(allowedTargets, rawCounts = {}) {
-    const counts = {};
-    allowedTargets.forEach((seat) => {
-      counts[seat] = Math.max(0, Number(rawCounts[seat] || rawCounts[String(seat)] || 0));
-    });
-    return counts;
-  }
-
-  function countsFromControls() {
-    const counts = {};
-    app.querySelectorAll(".vote-count").forEach((item) => {
-      counts[item.dataset.target] = Number(item.textContent || 0);
-    });
-    return counts;
-  }
-
-  function topSeatsFromCounts(counts) {
-    const maxVotes = Math.max(0, ...Object.values(counts));
-    return Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
-  }
-
-  function calculateDayVote({ room, round, votes, counts, pkSeats }) {
+  function calculateDayVote({ room, round, votes, pkSeats }) {
     const aliveSeats = getAliveSeats(room);
     const allowedTargets = round === 1 ? aliveSeats : pkSeats.filter((seat) => aliveSeats.includes(seat));
-    const finalCounts = normalizeVoteCounts(allowedTargets, counts);
-    (votes || []).forEach((vote) => {
+    const counts = {};
+    allowedTargets.forEach((seat) => { counts[seat] = 0; });
+    votes.forEach((vote) => {
       const targetSeat = Number(vote.targetSeat);
-      if (allowedTargets.includes(targetSeat)) finalCounts[targetSeat] += 1;
+      if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
     });
-    const topSeats = topSeatsFromCounts(finalCounts);
+    const maxVotes = Math.max(0, ...Object.values(counts));
+    const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
     const exiledSeat = topSeats.length === 1 ? topSeats[0] : 0;
     const noExile = !exiledSeat && (round === 2 || topSeats.length === 0);
     return {
       day: room.night,
       round,
-      votes: votes || [],
-      counts: finalCounts,
+      votes,
+      counts,
       topSeats,
       pkSeats: round === 1 && topSeats.length > 1 ? topSeats : [],
       exiledSeat,
@@ -1152,30 +1133,30 @@
     const previous = room.sheriffVoteRecord;
     const secondRound = previous && previous.pkSeats && previous.pkSeats.length > 1 && !previous.electedSeat;
     const targets = secondRound ? previous.pkSeats : activeCandidates;
-    const voteLimit = room.seats
+    const voters = room.seats
       .map((seat) => seat.seat)
-      .filter((seat) => secondRound ? !targets.includes(seat) : !withdrawn.includes(seat))
-      .length;
+      .filter((seat) => {
+        if (secondRound) return !targets.includes(seat);
+        return !withdrawn.includes(seat);
+      });
 
     app.innerHTML = `
       ${pageHeader(secondRound ? "警徽 PK 投票" : "警徽投票", secondRound ? `PK 玩家：${formatSeatList(targets)}。除 PK 玩家外所有人投票。` : "退水玩家不参与第一轮警徽投票。")}
       <section class="panel">
         <div class="label">候选目标</div>
         <div class="body-text">${formatSeatList(targets)}</div>
-        <div class="notice">参考可投票数：${voteLimit} 票。弃票不用记录。</div>
       </section>
       <section class="panel">
-        <div class="label">快速计票</div>
+        <div class="label">逐个记录投票</div>
         <div class="list">
-          ${targets.map((seat) => `
-            <div class="list-item">
+          ${voters.map((seat) => `
+            <label class="list-item">
               <span class="value">${seat}号</span>
-              <div class="vote-counter">
-                <button class="counter-button" data-action="vote-minus" data-target="${seat}" type="button">-</button>
-                <span class="vote-count" data-target="${seat}">0</span>
-                <button class="counter-button" data-action="vote-plus" data-target="${seat}" type="button">+</button>
-              </div>
-            </div>
+              <select class="select vote-select" data-voter="${seat}">
+                <option value="0">弃票/未投</option>
+                ${targets.map((targetSeat) => `<option value="${targetSeat}">${targetSeat}号</option>`).join("")}
+              </select>
+            </label>
           `).join("")}
         </div>
       </section>
@@ -1227,27 +1208,25 @@
     const secondRound = previous && previous.day === room.night && previous.pkSeats && previous.pkSeats.length > 1 && !previous.exiledSeat && !previous.noExile;
     const aliveSeats = getAliveSeats(room);
     const targets = secondRound ? previous.pkSeats : aliveSeats;
-    const voteLimit = secondRound ? aliveSeats.filter((seat) => !targets.includes(seat)).length : aliveSeats.length;
+    const voters = secondRound ? aliveSeats.filter((seat) => !targets.includes(seat)) : aliveSeats;
 
     app.innerHTML = `
       ${pageHeader(secondRound ? "放逐 PK 投票" : "放逐投票", secondRound ? `PK 玩家：${formatSeatList(targets)}。除 PK 玩家外投第二轮。` : "记录白天投票，平票进入 PK，二轮再平票无人出局。")}
       <section class="panel">
         <div class="label">可投目标</div>
         <div class="body-text">${formatSeatList(targets)}</div>
-        <div class="notice">参考可投票数：${voteLimit} 票。弃票不用记录。</div>
       </section>
       <section class="panel">
-        <div class="label">快速计票</div>
+        <div class="label">逐个记录投票</div>
         <div class="list">
-          ${targets.map((seat) => `
-            <div class="list-item">
+          ${voters.map((seat) => `
+            <label class="list-item">
               <span class="value">${seat}号</span>
-              <div class="vote-counter">
-                <button class="counter-button" data-action="vote-minus" data-target="${seat}" type="button">-</button>
-                <span class="vote-count" data-target="${seat}">0</span>
-                <button class="counter-button" data-action="vote-plus" data-target="${seat}" type="button">+</button>
-              </div>
-            </div>
+              <select class="select day-vote-select" data-voter="${seat}">
+                <option value="0">弃票/未投</option>
+                ${targets.map((targetSeat) => `<option value="${targetSeat}">${targetSeat}号</option>`).join("")}
+              </select>
+            </label>
           `).join("")}
         </div>
       </section>
@@ -1611,23 +1590,17 @@
       return;
     }
 
-    if (action === "vote-plus" || action === "vote-minus") {
-      const count = app.querySelector(`.vote-count[data-target="${target.dataset.target}"]`);
-      if (!count) return;
-      const value = Number(count.textContent || 0);
-      count.textContent = String(Math.max(0, value + (action === "vote-plus" ? 1 : -1)));
-      return;
-    }
-
     if (action === "sheriff-vote-submit" && room) {
       const round = Number(target.dataset.round || 1);
       const previous = room.sheriffVoteRecord;
-      const votes = [];
-      const counts = countsFromControls();
+      const votes = Array.from(app.querySelectorAll(".vote-select")).map((select) => ({
+        voterSeat: Number(select.dataset.voter),
+        targetSeat: Number(select.value)
+      }));
       const pkSeats = previous && previous.pkSeats ? previous.pkSeats : [];
       try {
         if (IS_REMOTE) {
-          await remotePost("sheriff-vote", { round, votes, counts, pkSeats });
+          await remotePost("sheriff-vote", { round, votes, pkSeats });
           state.view = "room";
           saveState();
           render();
@@ -1638,14 +1611,19 @@
         const withdrawn = room.sheriffWithdrawn || [];
         const activeCandidates = candidates.filter((seat) => !withdrawn.includes(seat));
         const allowedTargets = round === 1 ? activeCandidates : pkSeats;
-        const finalCounts = normalizeVoteCounts(allowedTargets, counts);
-        const topSeats = topSeatsFromCounts(finalCounts);
+        const counts = {};
+        allowedTargets.forEach((seat) => { counts[seat] = 0; });
+        votes.forEach((vote) => {
+          if (allowedTargets.includes(vote.targetSeat)) counts[vote.targetSeat] += 1;
+        });
+        const maxVotes = Math.max(0, ...Object.values(counts));
+        const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
         const electedSeat = topSeats.length === 1 ? topSeats[0] : 0;
         const badgeLost = round === 2 && !electedSeat;
         const record = {
           round,
           votes,
-          counts: finalCounts,
+          counts,
           topSeats,
           electedSeat,
           badgeLost,
@@ -1710,19 +1688,21 @@
     if (action === "day-vote-submit" && room) {
       const round = Number(target.dataset.round || 1);
       const previous = room.dayVoteRecord;
-      const votes = [];
-      const counts = countsFromControls();
+      const votes = Array.from(app.querySelectorAll(".day-vote-select")).map((select) => ({
+        voterSeat: Number(select.dataset.voter),
+        targetSeat: Number(select.value)
+      }));
       const pkSeats = previous && previous.day === room.night && previous.pkSeats ? previous.pkSeats : [];
       try {
         if (IS_REMOTE) {
-          await remotePost("day-vote", { round, votes, counts, pkSeats });
+          await remotePost("day-vote", { round, votes, pkSeats });
           state.view = "room";
           saveState();
           render();
           return;
         }
 
-        const record = calculateDayVote({ room, round, votes, counts, pkSeats });
+        const record = calculateDayVote({ room, round, votes, pkSeats });
         room.dayVoteRecord = record;
         if (record.exiledSeat || record.noExile) {
           if (record.exiledSeat) {

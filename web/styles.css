@@ -419,35 +419,6 @@ select {
   border-bottom: 0;
 }
 
-.vote-counter {
-  display: grid;
-  grid-template-columns: 42px 42px 42px;
-  align-items: center;
-  gap: 6px;
-}
-
-.counter-button {
-  height: 38px;
-  border: 1px solid #151515;
-  border-radius: 8px;
-  background: #fff;
-  color: #151515;
-  font-size: 20px;
-  font-weight: 900;
-}
-
-.vote-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 38px;
-  border-radius: 8px;
-  background: #151515;
-  color: #fff;
-  font-size: 17px;
-  font-weight: 900;
-}
-
 .tag {
   display: inline-flex;
   align-items: center;
