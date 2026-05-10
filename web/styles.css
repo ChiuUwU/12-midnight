@@ -144,6 +144,14 @@ select {
   margin-bottom: 6px;
 }
 
+.brand-name {
+  color: #fff;
+  font-size: 38px;
+  line-height: 1.05;
+  font-weight: 900;
+  letter-spacing: 0;
+}
+
 .brand-title {
   font-size: 38px;
   line-height: 1.05;
@@ -664,6 +672,10 @@ select {
     font-size: 32px;
   }
 
+  .brand-name {
+    font-size: 32px;
+  }
+
   .brand-subtitle {
     font-size: 14px;
   }
@@ -732,6 +744,10 @@ select {
   }
 
   .brand-title {
+    font-size: 29px;
+  }
+
+  .brand-name {
     font-size: 29px;
   }
 
