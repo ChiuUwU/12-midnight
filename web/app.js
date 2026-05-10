@@ -210,6 +210,7 @@
       view: "home",
       remoteRoom: null,
       judgeTokens: {},
+      deathDraftSeats: [],
       rooms: {}
     };
   }
@@ -223,6 +224,7 @@
         ...saved,
         rooms: saved.rooms || {},
         judgeTokens: saved.judgeTokens || {},
+        deathDraftSeats: saved.deathDraftSeats || [],
         remoteRoom: null
       };
       const urlRoom = new URLSearchParams(location.search).get("room");
@@ -381,6 +383,67 @@
     };
   }
 
+  function calculateSuggestedDeaths(room, night = room.night) {
+    const actions = (room.nightActions || []).filter((item) => item.night === night);
+    const previousActions = (room.nightActions || []).filter((item) => item.night === night - 1);
+    const firstTarget = (stepId, source = actions) => {
+      const action = source.find((item) => item.stepId === stepId && !item.skipped);
+      return action && action.targetSeats && action.targetSeats.length ? action.targetSeats[0] : 0;
+    };
+    const deaths = new Map();
+    const protectedBy = new Map();
+    const addDeath = (seat, reason) => {
+      if (!seat) return;
+      const reasons = deaths.get(seat) || [];
+      reasons.push(reason);
+      deaths.set(seat, reasons);
+    };
+    const addProtection = (seat, reason) => {
+      if (!seat) return;
+      const reasons = protectedBy.get(seat) || [];
+      reasons.push(reason);
+      protectedBy.set(seat, reasons);
+    };
+
+    const wolfKill = firstTarget("wolves_kill");
+    const antidote = firstTarget("witch_antidote");
+    const witchPoison = firstTarget("witch_poison");
+    const poisonerPoison = firstTarget("poisoner_poison");
+    const guard = firstTarget("guard_guard");
+    const dream = firstTarget("dreamer_dream");
+    const previousDream = firstTarget("dreamer_dream", previousActions);
+
+    addDeath(wolfKill, "狼刀");
+    addDeath(witchPoison, "女巫毒");
+    addDeath(poisonerPoison, "毒师毒");
+    if (dream && previousDream && dream === previousDream) addDeath(dream, "连续摄梦");
+
+    addProtection(guard, "守卫");
+    addProtection(dream, "摄梦");
+
+    if (antidote && deaths.has(antidote)) {
+      const reasons = deaths.get(antidote).filter((reason) => reason !== "狼刀");
+      if (reasons.length) deaths.set(antidote, reasons);
+      else deaths.delete(antidote);
+    }
+
+    const sameGuardAndSave = guard && antidote && wolfKill && guard === antidote && antidote === wolfKill;
+    protectedBy.forEach((reasons, seat) => {
+      if (sameGuardAndSave && seat === wolfKill) {
+        deaths.set(seat, ["同守同救"]);
+        return;
+      }
+      if (!deaths.has(seat)) return;
+      const remaining = deaths.get(seat).filter((reason) => !["狼刀", "女巫毒", "毒师毒"].includes(reason));
+      if (remaining.length) deaths.set(seat, remaining);
+      else deaths.delete(seat);
+    });
+
+    return [...deaths.entries()]
+      .map(([seat, reasons]) => ({ seat, reasons }))
+      .sort((left, right) => left.seat - right.seat);
+  }
+
   function validateNightAction(room, step, targetSeats, skipped) {
     if (skipped) return "";
     if (step.id === "guard_guard") {
@@ -448,7 +511,7 @@
   function buildReviewTimeline(room) {
     const groups = {};
     (room.nightActions || []).forEach((action) => {
-      const detail = `${action.label || "夜间行动"}${action.skipped ? "：空过" : action.cardRoleId ? `：选择 ${getRole(action.cardRoleId).name}` : action.targetSeats && action.targetSeats.length ? `：${formatSeatList(action.targetSeats)}` : ""}`;
+      const detail = `${action.label || "夜间行动"}${action.skipped ? "：空过" : action.cardRoleId ? `：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}` : action.targetSeats && action.targetSeats.length ? `：${formatSeatList(action.targetSeats)}` : ""}`;
       pushTimelineItem(groups, `night-${action.night}`, `第 ${action.night} 天夜晚`, detail);
     });
     (room.deathRecords || []).forEach((record) => {
@@ -808,6 +871,7 @@
     const sheriffVote = room.sheriffVoteRecord;
     const sheriffBadge = room.sheriffBadge || { holderSeat: 0, lost: false };
     const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
+    const suggestedDeaths = room.phase === "DAY" && isJudge ? calculateSuggestedDeaths(room, room.night) : [];
 
     app.innerHTML = `
       ${pageHeader(`房间 ${room.id}`, `${board.name} · ${room.mode === "JUDGE" ? "有法官" : "无法官"} · ${getPhaseName(room.phase)}`)}
@@ -849,6 +913,7 @@
       <section class="panel">
         <div class="label">公开死亡</div>
         <div class="body-text">${latestDeaths ? `第 ${latestDeaths.day} 天：${formatSeatList(latestDeaths.seats)}` : "暂未记录"}</div>
+        ${suggestedDeaths.length ? `<div class="notice">建议天亮死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}</div>` : ""}
       </section>
       <section class="panel">
         <div class="label">白天放逐</div>
@@ -870,6 +935,7 @@
       ${room.phase === "DAY" && room.night === 1 && isJudge && sheriffActive.length ? '<button class="button" data-action="view" data-view="sheriffVote">记录警徽投票</button>' : ""}
       ${!gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : ""}
       ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : ""}
+      ${room.phase === "DAY" && isJudge && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : ""}
       ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : ""}
       ${room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : ""}
       ${room.phase === "DAY" && isJudge ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : ""}
@@ -952,11 +1018,13 @@
       : [];
 
     if (!step) {
+      const suggestedDeaths = calculateSuggestedDeaths(room, room.night);
       app.innerHTML = `
         ${pageHeader(`第 ${room.night || 1} 夜`, "夜间行动已记录完成")}
         <section class="panel">
           <div class="value">可以进入天亮阶段</div>
-          <div class="notice">当前版本只记录行动，不自动结算死亡。请法官线下确认死亡信息。</div>
+          <div class="notice">${suggestedDeaths.length ? `建议天亮死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}` : "建议天亮死亡：无"}</div>
+          <div class="notice">建议结果不会自动公布，请法官天亮后确认。</div>
         </section>
         <button class="button primary" data-action="night-finish">天亮</button>
         <button class="button" data-action="view" data-view="room">返回房间</button>
@@ -1093,10 +1161,12 @@
     if (!room) return setView("home");
     const isJudge = !IS_REMOTE || room.isJudge;
     if (!isJudge) return setView("room");
+    const draftSeats = state.deathDraftSeats || [];
     app.innerHTML = `
       ${pageHeader("记录天亮死亡", "选择昨夜死亡玩家，确认后所有人可见")}
+      ${draftSeats.length ? `<section class="panel"><div class="notice">已带入建议死亡：${formatSeatList(draftSeats)}。仍可手动调整。</div></section>` : ""}
       <section class="seat-grid">
-        ${room.seats.map((seat) => `<button class="seat" data-action="death-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
+        ${room.seats.map((seat) => `<button class="seat ${draftSeats.includes(seat.seat) ? "selected" : ""}" data-action="death-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
       </section>
       <button class="button primary" data-action="death-submit">确认死亡名单</button>
       <button class="button" data-action="death-none">无人死亡</button>
@@ -1322,10 +1392,19 @@
       return;
     }
 
+    if (action === "use-suggested-deaths" && room) {
+      state.deathDraftSeats = calculateSuggestedDeaths(room, room.night).map((item) => item.seat);
+      state.view = "death";
+      saveState();
+      render();
+      return;
+    }
+
     if (action === "start-night" && room) {
       try {
         if (IS_REMOTE) {
           await remotePost("night-start");
+          state.deathDraftSeats = [];
           state.view = "night";
           saveState();
           render();
@@ -1337,6 +1416,7 @@
         room.currentNightStepIndex = 0;
         room.nightActions = room.nightActions || [];
         writeLog(room, "NIGHT_STARTED", { night: room.night });
+        state.deathDraftSeats = [];
         state.view = "night";
         saveState();
         render();
@@ -1572,6 +1652,7 @@
       try {
         if (IS_REMOTE) {
           await remotePost("death-record", { seats });
+          state.deathDraftSeats = [];
           state.view = "room";
           saveState();
           render();
@@ -1585,6 +1666,7 @@
         room.deathRecords = room.deathRecords || [];
         room.deathRecords.push(record);
         writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
+        state.deathDraftSeats = [];
         state.view = "room";
         saveState();
         render();
