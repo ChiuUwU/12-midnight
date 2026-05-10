@@ -411,6 +411,23 @@ async function handleApi(request, response, url) {
     });
   }
 
+  if (target.action === "sheriff-self-withdraw") {
+    if (room.phase !== "DAY" || room.night !== 1) {
+      return sendError(response, 400, "退水应在第一天警上阶段记录");
+    }
+    const mySeat = room.seats.find((seat) => seat.clientId === clientId);
+    if (!mySeat) return sendError(response, 400, "请先选择座位");
+    const candidates = room.sheriffCandidates || [];
+    if (!candidates.includes(mySeat.seat)) return sendError(response, 400, "只有上警玩家可以退水");
+    const withdrawn = new Set(room.sheriffWithdrawn || []);
+    withdrawn.add(mySeat.seat);
+    room.sheriffWithdrawn = [...withdrawn].filter((seat) => candidates.includes(seat)).sort((a, b) => a - b);
+    writeLog(room, "SHERIFF_SELF_WITHDRAWN", { seat: mySeat.seat });
+    return sendJson(response, 200, {
+      room: sanitizeRoom(room, { clientId, judgeToken })
+    });
+  }
+
   if (target.action === "sheriff-vote") {
     if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录警徽投票");
     if (room.phase !== "DAY" || room.night !== 1) {
@@ -603,6 +620,21 @@ async function handleApi(request, response, url) {
     room.nightActions.push(actionRecord);
     writeLog(room, "NIGHT_ACTION", actionRecord);
     room.currentNightStepIndex += 1;
+    return sendJson(response, 200, {
+      room: sanitizeRoom(room, { clientId, judgeToken })
+    });
+  }
+
+  if (target.action === "night-undo") {
+    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以撤回夜间行动");
+    if (room.phase !== "NIGHT") return sendError(response, 400, "当前不在夜晚阶段");
+    const index = [...room.nightActions].map((action, actionIndex) => ({ action, actionIndex }))
+      .reverse()
+      .find((item) => item.action.night === room.night);
+    if (!index) return sendError(response, 400, "没有可撤回的夜间行动");
+    const [removed] = room.nightActions.splice(index.actionIndex, 1);
+    room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
+    writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
