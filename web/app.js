@@ -558,14 +558,14 @@
       wolves_kill: "狼人请睁眼，请确认同伴，并选择今晚击杀目标；也可以空刀。选择后闭眼。",
       witch_antidote: `女巫请睁眼，今晚死亡信息为${killedSeat ? `${killedSeat}号` : "无人"}，是否使用解药？选择后闭眼。`,
       witch_poison: "女巫请继续操作，是否使用毒药？选择目标或空过后闭眼。",
-      seer_check: "预言家请睁眼，请查验一名玩家。法官线下告知阵营后，预言家闭眼。",
+      seer_check: "预言家请睁眼，请查验一名玩家。法官线下只告知好人或狼人，不告知具体身份；预言家闭眼。",
       dancer_dance: "舞者请睁眼，请选择三名玩家进入舞池。选择后闭眼。",
       mask_check: "假面请睁眼，请验证一名玩家是否在舞池中。记录后继续。",
       mask_give: "假面请选择一名玩家给予面具。选择后闭眼。",
       treasure_pick: "盗宝大师请睁眼，请从盗宝牌堆中选择今晚使用的身份牌。选择后闭眼。",
       dreamer_dream: "摄梦人请睁眼，请选择今晚摄梦目标。选择后闭眼。",
       poisoner_poison: "毒师请睁眼，是否使用毒药？选择目标或空过后闭眼。",
-      spirit_medium_check: "通灵师请睁眼，请查验一名存活玩家的具体身份。法官线下告知后闭眼。",
+      spirit_medium_check: "通灵师请睁眼，请查验一名存活玩家。法官线下告知具体身份牌后，通灵师闭眼。",
       mechanical_mimic: "机械狼请睁眼，请选择今晚模仿的目标。记录后闭眼。",
       guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。"
     };
@@ -1148,7 +1148,7 @@
       <section class="panel">
         <div class="label">已记录</div>
         <div class="list">
-          ${currentNightActions.length ? currentNightActions.map((action) => `<div class="list-item"><div><div class="value">${escapeHtml(action.label || "夜间行动")}</div><div class="label">${escapeHtml(formatNightAction(action).replace(`${action.label || "夜间行动"}：`, ""))}</div></div></div>`).join("") : '<div class="empty">暂无记录</div>'}
+          ${currentNightActions.length ? currentNightActions.map((action) => `<div class="list-item"><div><div class="night-record-main">${escapeHtml(formatNightAction(action).replace(`${action.label || "夜间行动"}：`, ""))}</div><div class="night-record-sub">${escapeHtml(action.label || "夜间行动")}</div></div></div>`).join("") : '<div class="empty">暂无记录</div>'}
         </div>
         <div class="notice">${suggestedDeaths.length ? `当前建议死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}` : "当前建议死亡：无"}</div>
       </section>

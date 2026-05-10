@@ -579,6 +579,19 @@ select {
   color: #4f7b56;
 }
 
+.night-record-main {
+  font-size: 16px;
+  line-height: 1.35;
+  font-weight: 820;
+}
+
+.night-record-sub {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
 .card-options {
   display: grid;
   gap: 10px;
