@@ -555,6 +555,73 @@
     return parts.join(" · ");
   }
 
+  function getPlayerPhaseText(room, mySeat) {
+    if (!room) return "";
+    if (!mySeat) return "请选择座位，等待法官发牌。";
+    if (room.phase === "WAITING") return "等待玩家入座和法官发牌。";
+    if (room.phase === "DEALT") return "请查看自己的身份，然后等待法官开始第一夜。";
+    if (room.phase === "NIGHT") return "夜间阶段，请按线下流程闭眼等待。";
+    if (room.phase === "GAME_OVER") return "游戏已结束，可以等待法官复盘。";
+    if (room.phase === "DAY" && room.night === 1 && !isSheriffElectionFinished(room)) {
+      const candidates = room.sheriffCandidates || [];
+      const withdrawn = room.sheriffWithdrawn || [];
+      if (candidates.includes(mySeat.seat) && !withdrawn.includes(mySeat.seat)) {
+        return "警长竞选中，你仍在警上；如需退水可点击“我要退水”。";
+      }
+      if (candidates.includes(mySeat.seat) && withdrawn.includes(mySeat.seat)) return "警长竞选中，你已退水。";
+      return "警长竞选中，等待警徽结果。";
+    }
+    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
+    if (room.phase === "DAY" && room.night === 1 && !daybreakRecorded) {
+      return "警长竞选已结束，等待法官公布第一夜死亡信息。";
+    }
+    return "白天阶段，等待发言、投票或法官记录结果。";
+  }
+
+  function getJudgeNextStep(room) {
+    if (!room) return { title: "暂无房间", detail: "请先创建或加入房间。", action: "" };
+    const occupiedCount = (room.seats || []).filter((seat) => seat.occupied).length;
+    const board = getBoard(room.boardId);
+    if (room.phase === "WAITING") {
+      return occupiedCount >= board.playerCount
+        ? { title: "可以发牌", detail: "12 名玩家已入座，下一步发牌。", action: "发牌" }
+        : { title: "等待入座", detail: `当前 ${occupiedCount}/${board.playerCount} 人，满员后再发牌。`, action: "等待玩家" };
+    }
+    if (room.phase === "DEALT") return { title: "开始第一夜", detail: "玩家看完身份后，进入第一夜流程。", action: "开始第一夜" };
+    if (room.phase === "NIGHT") {
+      const step = room.currentNightSteps && room.currentNightSteps[room.currentNightStepIndex || 0];
+      return step
+        ? { title: "继续夜间流程", detail: `当前步骤：${step.label}`, action: "继续夜间流程" }
+        : { title: "夜间已完成", detail: room.night === 1 ? "下一步进入警长竞选。" : "下一步确认天亮死亡。", action: "天亮" };
+    }
+    if (room.phase === "DAY" && room.night === 1 && !(room.sheriffCandidates || []).length && !room.sheriffElectionDone) {
+      return { title: "记录上警", detail: "第一夜结束后先进行警长竞选。", action: "记录上警" };
+    }
+    if (room.phase === "DAY" && room.night === 1 && !isSheriffElectionFinished(room)) {
+      const activeCandidates = (room.sheriffCandidates || []).filter((seat) => !(room.sheriffWithdrawn || []).includes(seat));
+      if (!activeCandidates.length) return { title: "警徽流失", detail: "警上玩家均已退水，下一步公布死亡。", action: "记录天亮死亡" };
+      const vote = room.sheriffVoteRecord;
+      return vote && vote.pkSeats && vote.pkSeats.length
+        ? { title: "警徽 PK 投票", detail: `PK 玩家：${formatSeatList(vote.pkSeats)}。`, action: "记录警徽投票" }
+        : { title: "记录警徽投票", detail: `仍在警上：${formatSeatList(activeCandidates)}。`, action: "记录警徽投票" };
+    }
+    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
+    if (room.phase === "DAY" && !daybreakRecorded) {
+      return { title: "公布死亡", detail: room.night === 1 ? "警长竞选已结束，现在公布第一夜死亡。" : "请确认昨夜死亡玩家。", action: "记录天亮死亡" };
+    }
+    if (room.phase === "DAY") {
+      const vote = room.dayVoteRecord;
+      if (vote && vote.day === room.night && vote.pkSeats && vote.pkSeats.length && !vote.exiledSeat && !vote.noExile) {
+        return { title: "放逐 PK 投票", detail: `PK 玩家：${formatSeatList(vote.pkSeats)}。`, action: "记录放逐投票" };
+      }
+      if (!(room.exileRecords || []).some((record) => record.day === room.night)) {
+        return { title: "记录放逐", detail: "白天发言结束后记录放逐投票。", action: "记录放逐投票" };
+      }
+      return { title: "进入下一夜", detail: "白天结果已记录，可以进入下一夜。", action: "进入下一夜" };
+    }
+    return { title: "游戏已结束", detail: "可以查看复盘。", action: "复盘" };
+  }
+
   function getJudgeScript(step, room) {
     if (!step) return "夜间行动已完成，法官确认死亡信息后可以天亮。";
     const wolfAction = [...(room.nightActions || [])]
@@ -978,6 +1045,7 @@
     const canRunDayActions = room.phase === "DAY" && isJudge && (room.night !== 1 || daybreakRecorded);
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
+    const judgeNextStep = getJudgeNextStep(room);
     const mainActions = [
       room.phase === "WAITING" ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : "",
       room.phase === "DEALT" && isJudge ? '<button class="button primary" data-action="start-night">开始第一夜</button>' : "",
@@ -1034,6 +1102,7 @@
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
         <div class="notice">${isJudge ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
+        <div class="notice">${isJudge ? `下一步：${judgeNextStep.title}。${judgeNextStep.detail}` : getPlayerPhaseText(room, mySeat)}</div>
       </section>
       <section class="panel">
         <div class="label">上警玩家</div>
@@ -1400,8 +1469,15 @@
     const currentStep = room.currentNightSteps && room.currentNightSteps[room.currentNightStepIndex || 0];
     const currentNightActions = (room.nightActions || []).filter((action) => action.night === room.night);
     const sheriffBadge = room.sheriffBadge || { holderSeat: 0, lost: false };
+    const nextStep = getJudgeNextStep(room);
     app.innerHTML = `
       ${pageHeader("法官总览", `${board.name} · 房间 ${room.id}`)}
+      <section class="panel next-step-panel">
+        <div class="label">下一步建议</div>
+        <div class="value">${nextStep.title}</div>
+        <div class="body-text">${nextStep.detail}</div>
+        ${nextStep.action ? `<div class="tag next-step-tag">${nextStep.action}</div>` : ""}
+      </section>
       <section class="panel">
         <div class="label">当前状态</div>
         <div class="list">
