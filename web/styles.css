@@ -368,6 +368,14 @@ select {
   background: #fff7e7;
 }
 
+.result-notice {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f5eddf;
+  color: #332f2a;
+  font-weight: 780;
+}
+
 .field {
   display: grid;
   gap: 8px;

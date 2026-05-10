@@ -265,11 +265,11 @@ function createNightSteps(boardId, night) {
     );
   } else if (boardId === "mechanical_wolf_spirit_medium") {
     steps.push(
-      { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
       { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
       { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true },
       { id: "witch_antidote", actor: "witch", label: "女巫选择是否救人", targetCount: 1, allowSkip: true },
       { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
+      { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
   }
@@ -344,6 +344,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     currentNightStepIndex: judge ? room.currentNightStepIndex : 0,
     sheriffCandidates: room.sheriffCandidates || [],
     sheriffWithdrawn: room.sheriffWithdrawn || [],
+    sheriffElectionDone: Boolean(room.sheriffElectionDone),
     sheriffVoteRecord: room.sheriffVoteRecord || null,
     sheriffBadge: room.sheriffBadge || { holderSeat: 0, lost: false },
     dayVoteRecord: room.dayVoteRecord || null,
@@ -366,6 +367,13 @@ function uniqueSeats(value, allowed) {
   const seats = Array.isArray(value) ? value.map(Number).filter((seat) => seat >= 1 && seat <= 12) : [];
   const filtered = allowed ? seats.filter((seat) => allowed.includes(seat)) : seats;
   return [...new Set(filtered)].sort((a, b) => a - b);
+}
+
+function isSheriffElectionFinished(room) {
+  if (!room || room.night !== 1) return true;
+  if (room.sheriffElectionDone) return true;
+  const record = room.sheriffVoteRecord;
+  return Boolean(record && (record.electedSeat || record.badgeLost));
 }
 
 function getAliveSeats(room) {
@@ -445,6 +453,7 @@ async function handleCreateRoom(request, env) {
     currentNightStepIndex: 0,
     sheriffCandidates: [],
     sheriffWithdrawn: [],
+    sheriffElectionDone: false,
     sheriffVoteRecord: null,
     sheriffBadge: { holderSeat: 0, lost: false },
     dayVoteRecord: null,
@@ -584,12 +593,20 @@ async function handleRoomAction(request, env, route) {
     const seats = uniqueSeats(body.seats);
     room.sheriffCandidates = seats;
     room.sheriffWithdrawn = (room.sheriffWithdrawn || []).filter((seat) => seats.includes(seat));
+    room.sheriffElectionDone = seats.length === 0;
+    room.sheriffVoteRecord = null;
+    if (!seats.length) room.sheriffBadge = { holderSeat: 0, lost: true };
     writeLog(room, "SHERIFF_CANDIDATES_CONFIRMED", { seats });
   } else if (route.action === "sheriff-withdraw") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录退水");
     if (room.phase !== "DAY" || room.night !== 1) return error(400, "退水应在第一天警上阶段记录");
     const seats = uniqueSeats(body.seats, room.sheriffCandidates || []);
     room.sheriffWithdrawn = seats;
+    const activeCandidates = (room.sheriffCandidates || []).filter((seat) => !room.sheriffWithdrawn.includes(seat));
+    if ((room.sheriffCandidates || []).length && !activeCandidates.length) {
+      room.sheriffElectionDone = true;
+      room.sheriffBadge = { holderSeat: 0, lost: true };
+    }
     writeLog(room, "SHERIFF_WITHDRAW_CONFIRMED", { seats });
   } else if (route.action === "sheriff-self-withdraw") {
     if (room.phase !== "DAY" || room.night !== 1) return error(400, "退水应在第一天警上阶段记录");
@@ -600,6 +617,11 @@ async function handleRoomAction(request, env, route) {
     const withdrawn = new Set(room.sheriffWithdrawn || []);
     withdrawn.add(mySeat.seat);
     room.sheriffWithdrawn = [...withdrawn].filter((seat) => candidates.includes(seat)).sort((a, b) => a - b);
+    const activeCandidates = candidates.filter((seat) => !room.sheriffWithdrawn.includes(seat));
+    if (candidates.length && !activeCandidates.length) {
+      room.sheriffElectionDone = true;
+      room.sheriffBadge = { holderSeat: 0, lost: true };
+    }
     writeLog(room, "SHERIFF_SELF_WITHDRAWN", { seat: mySeat.seat });
   } else if (route.action === "sheriff-vote") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录警徽投票");
@@ -631,6 +653,7 @@ async function handleRoomAction(request, env, route) {
       createdAt: Date.now()
     };
     room.sheriffVoteRecord = record;
+    room.sheriffElectionDone = Boolean(electedSeat || badgeLost);
     if (electedSeat) {
       room.sheriffBadge = { holderSeat: electedSeat, lost: false };
       room.assignments.forEach((assignment) => { assignment.sheriff = assignment.seat === electedSeat; });
@@ -641,6 +664,7 @@ async function handleRoomAction(request, env, route) {
   } else if (route.action === "death-record") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录死亡");
     if (room.phase !== "DAY") return error(400, "当前阶段不能记录天亮死亡");
+    if (!isSheriffElectionFinished(room)) return error(400, "第一天死亡结果应在警长竞选结束后公布");
     const seats = uniqueSeats(body.seats);
     seats.forEach((seat) => {
       const assignment = room.assignments.find((item) => item.seat === seat);

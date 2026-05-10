@@ -190,11 +190,11 @@
       );
     } else if (boardId === "mechanical_wolf_spirit_medium") {
       steps.push(
-        { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
         { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
         { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true },
         { id: "witch_antidote", actor: "witch", label: "女巫选择是否救人", targetCount: 1, allowSkip: true },
         { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
+        { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
         { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
       );
     }
@@ -270,6 +270,7 @@
       currentNightStepIndex: 0,
       sheriffCandidates: [],
       sheriffWithdrawn: [],
+      sheriffElectionDone: false,
       sheriffVoteRecord: null,
       sheriffBadge: { holderSeat: 0, lost: false },
       dayVoteRecord: null,
@@ -349,6 +350,13 @@
 
   function latestRecord(records) {
     return records && records.length ? records[records.length - 1] : null;
+  }
+
+  function isSheriffElectionFinished(room) {
+    if (!room || room.night !== 1) return true;
+    if (room.sheriffElectionDone) return true;
+    const record = room.sheriffVoteRecord;
+    return Boolean(record && (record.electedSeat || record.badgeLost));
   }
 
   function getAliveSeats(room) {
@@ -570,6 +578,30 @@
       guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。"
     };
     return scripts[step.id] || `${step.label}。记录完成后进入下一步。`;
+  }
+
+  function getNightResultText(room, step, targetSeats) {
+    if (!step || !["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id)) return "";
+    const seat = targetSeats && targetSeats.length ? Number(targetSeats[0]) : 0;
+    if (!seat) return "选择目标后，这里会显示需要告知角色的结果。";
+    const assignment = (room.assignments || []).find((item) => item.seat === seat);
+    if (!assignment) return `${seat}号：未找到身份`;
+    const role = getRole(assignment.roleId) || { name: assignment.roleId };
+    if (step.id === "seer_check") {
+      const result = assignment.camp === "WOLF" ? "狼人" : "好人";
+      return `${seat}号查验结果：${result}`;
+    }
+    if (step.id === "spirit_medium_check") {
+      return `${seat}号具体身份：${role.name}`;
+    }
+    return `${seat}号具体身份：${role.name}，请告知机械狼。`;
+  }
+
+  function updateNightResultDisplay(room, step) {
+    const result = app.querySelector("#nightResult");
+    if (!result) return;
+    const targetSeats = Array.from(app.querySelectorAll(".seat.selected")).map((item) => Number(item.dataset.seat));
+    result.textContent = getNightResultText(room, step, targetSeats);
   }
 
   function pushTimelineItem(groups, key, title, detail) {
@@ -940,7 +972,11 @@
     const sheriffVote = room.sheriffVoteRecord;
     const sheriffBadge = room.sheriffBadge || { holderSeat: 0, lost: false };
     const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
-    const suggestedDeaths = room.phase === "DAY" && isJudge ? calculateSuggestedDeaths(room, room.night) : [];
+    const sheriffElectionDone = isSheriffElectionFinished(room);
+    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
+    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && sheriffElectionDone;
+    const canRunDayActions = room.phase === "DAY" && isJudge && (room.night !== 1 || daybreakRecorded);
+    const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
     const mainActions = [
       room.phase === "WAITING" ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : "",
@@ -950,11 +986,11 @@
       canSelfWithdraw ? '<button class="button primary" data-action="self-withdraw">我要退水</button>' : "",
       room.phase === "DAY" && room.night === 1 && isJudge && sheriffActive.length ? '<button class="button" data-action="view" data-view="sheriffVote">记录警徽投票</button>' : "",
       !gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : "",
-      room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
-      room.phase === "DAY" && isJudge && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
-      room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : "",
-      room.phase === "DAY" && isJudge ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : "",
-      room.phase === "DAY" && isJudge ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
+      canRecordDaybreakDeaths ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
+      canRecordDaybreakDeaths && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
+      canRunDayActions ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : "",
+      canRunDayActions ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : "",
+      canRunDayActions ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.phase === "NIGHT" && isJudge ? '<button class="button primary" data-action="view" data-view="night">继续夜间流程</button>' : "",
       room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
@@ -1004,12 +1040,13 @@
         <div class="body-text">${sheriffCandidates.length ? sheriffCandidates.map((seat) => `${seat}号`).join("、") : "暂未记录"}</div>
         <div class="notice">已退水：${sheriffWithdrawn.length ? sheriffWithdrawn.map((seat) => `${seat}号`).join("、") : "无"}</div>
         <div class="notice">仍在警上：${sheriffActive.length ? sheriffActive.map((seat) => `${seat}号`).join("、") : "无"}</div>
-        <div class="notice">警徽结果：${sheriffVote ? sheriffVote.electedSeat ? `${sheriffVote.electedSeat}号当选` : sheriffVote.badgeLost ? "警徽流失" : sheriffVote.pkSeats && sheriffVote.pkSeats.length ? `${formatSeatList(sheriffVote.pkSeats)} 平票 PK` : "未产生警长" : "暂未投票"}</div>
+        <div class="notice">警徽结果：${sheriffVote ? sheriffVote.electedSeat ? `${sheriffVote.electedSeat}号当选` : sheriffVote.badgeLost ? "警徽流失" : sheriffVote.pkSeats && sheriffVote.pkSeats.length ? `${formatSeatList(sheriffVote.pkSeats)} 平票 PK` : "未产生警长" : sheriffElectionDone ? "警徽流失" : "暂未投票"}</div>
         <div class="notice">当前警长：${sheriffBadge.holderSeat ? `${sheriffBadge.holderSeat}号` : sheriffBadge.lost ? "警徽流失" : "暂无"}</div>
       </section>
       <section class="panel">
         <div class="label">公开死亡</div>
         <div class="body-text">${latestDeaths ? `第 ${latestDeaths.day} 天：${formatSeatList(latestDeaths.seats)}` : "暂未记录"}</div>
+        ${room.phase === "DAY" && room.night === 1 && !sheriffElectionDone ? '<div class="notice">第一天死亡结果应在警长竞选结束后公布。</div>' : ""}
         ${suggestedDeaths.length ? `<div class="notice">建议天亮死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}</div>` : ""}
       </section>
       <section class="panel">
@@ -1142,6 +1179,7 @@
           <section class="seat-grid">
             ${room.seats.map((seat) => `<button class="seat" data-action="night-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
           </section>
+          ${["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id) ? `<div class="notice result-notice" id="nightResult">${escapeHtml(getNightResultText(room, step, []))}</div>` : ""}
         </section>
       `}
 
@@ -1262,6 +1300,14 @@
     if (!room) return setView("home");
     const isJudge = !IS_REMOTE || room.isJudge;
     if (!isJudge) return setView("room");
+    if (!isSheriffElectionFinished(room)) {
+      app.innerHTML = `
+        ${pageHeader("记录天亮死亡", "请先完成警长竞选")}
+        <section class="panel"><div class="body-text">第一天死亡结果应在警下公布。请先记录上警、退水和警徽结果，再回到这里公布死亡。</div></section>
+        <button class="button" data-action="view" data-view="room">返回房间</button>
+      `;
+      return;
+    }
     const draftSeats = state.deathDraftSeats || [];
     app.innerHTML = `
       ${pageHeader("记录天亮死亡", "选择昨夜死亡玩家，确认后所有人可见")}
@@ -1520,6 +1566,11 @@
         const withdrawn = new Set(room.sheriffWithdrawn || []);
         withdrawn.add(mySeat.seat);
         room.sheriffWithdrawn = [...withdrawn].filter((seat) => (room.sheriffCandidates || []).includes(seat)).sort((a, b) => a - b);
+        const activeCandidates = (room.sheriffCandidates || []).filter((seat) => !room.sheriffWithdrawn.includes(seat));
+        if ((room.sheriffCandidates || []).length && !activeCandidates.length) {
+          room.sheriffElectionDone = true;
+          room.sheriffBadge = { holderSeat: 0, lost: true };
+        }
         writeLog(room, "SHERIFF_SELF_WITHDRAWN", { seat: mySeat.seat });
         saveState();
         render();
@@ -1577,6 +1628,7 @@
         }
       }
       target.classList.toggle("selected");
+      updateNightResultDisplay(room, step);
       return;
     }
 
@@ -1666,7 +1718,7 @@
         if (IS_REMOTE) {
           await remotePost("night-finish");
           state.deathDraftSeats = calculateSuggestedDeaths(state.remoteRoom, state.remoteRoom.night).map((item) => item.seat);
-          state.view = "death";
+          state.view = state.remoteRoom.night === 1 ? "sheriff" : "death";
           saveState();
           render();
           return;
@@ -1674,7 +1726,7 @@
         room.phase = "DAY";
         writeLog(room, "NIGHT_FINISHED", { night: room.night });
         state.deathDraftSeats = calculateSuggestedDeaths(room, room.night).map((item) => item.seat);
-        state.view = "death";
+        state.view = room.night === 1 ? "sheriff" : "death";
         saveState();
         render();
       } catch (error) {
@@ -1703,6 +1755,9 @@
         }
         room.sheriffCandidates = seats;
         room.sheriffWithdrawn = (room.sheriffWithdrawn || []).filter((seat) => seats.includes(seat));
+        room.sheriffElectionDone = seats.length === 0;
+        room.sheriffVoteRecord = null;
+        if (!seats.length) room.sheriffBadge = { holderSeat: 0, lost: true };
         writeLog(room, "SHERIFF_CANDIDATES_CONFIRMED", { seats });
         state.view = "room";
         saveState();
@@ -1732,6 +1787,11 @@
           return;
         }
         room.sheriffWithdrawn = seats.filter((seat) => (room.sheriffCandidates || []).includes(seat));
+        const activeCandidates = (room.sheriffCandidates || []).filter((seat) => !room.sheriffWithdrawn.includes(seat));
+        if ((room.sheriffCandidates || []).length && !activeCandidates.length) {
+          room.sheriffElectionDone = true;
+          room.sheriffBadge = { holderSeat: 0, lost: true };
+        }
         writeLog(room, "SHERIFF_WITHDRAW_CONFIRMED", { seats: room.sheriffWithdrawn });
         state.view = "room";
         saveState();
@@ -1783,6 +1843,7 @@
           createdAt: Date.now()
         };
         room.sheriffVoteRecord = record;
+        room.sheriffElectionDone = Boolean(electedSeat || badgeLost);
         if (electedSeat) {
           room.sheriffBadge = { holderSeat: electedSeat, lost: false };
           room.assignments.forEach((assignment) => {
