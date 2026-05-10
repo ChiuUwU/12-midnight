@@ -155,7 +155,11 @@
     });
   }
 
-  function createNightSteps(boardId, night) {
+  function hasUsedNightStep(room, stepId) {
+    return (room && room.nightActions || []).some((action) => action.stepId === stepId && !action.skipped);
+  }
+
+  function createNightSteps(boardId, night, room = null) {
     const firstNight = night === 1;
     const steps = [];
     if (boardId === "pre_witch_hunter_idiot_mixed") {
@@ -198,7 +202,9 @@
         { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
       );
     }
-    return steps.map((step, index) => ({ ...step, index }));
+    return steps
+      .filter((step) => !(step.id === "witch_antidote" && hasUsedNightStep(room, "witch_antidote")))
+      .map((step, index) => ({ ...step, index }));
   }
 
   let state = loadState();
@@ -461,8 +467,18 @@
       .sort((left, right) => left.seat - right.seat);
   }
 
+  function getNightActionTarget(room, stepId, night = room.night) {
+    const action = (room.nightActions || []).find((item) => item.night === night && item.stepId === stepId && !item.skipped);
+    return action && action.targetSeats && action.targetSeats.length ? action.targetSeats[0] : 0;
+  }
+
+  function getWitchAntidoteTarget(room) {
+    return getNightActionTarget(room, "wolves_kill", room.night);
+  }
+
   function formatNightAction(action) {
     if (!action) return "";
+    if (action.stepId === "witch_antidote") return action.skipped ? "女巫选择不救" : `女巫救 ${formatSeatList(action.targetSeats || [])}`;
     if (action.skipped) return `${action.label || "夜间行动"}：空过`;
     if (action.cardRoleId) return `${action.label || "夜间行动"}：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}`;
     if (action.targetSeats && action.targetSeats.length) return `${action.label || "夜间行动"}：${formatSeatList(action.targetSeats)}`;
@@ -624,10 +640,7 @@
 
   function getJudgeScript(step, room) {
     if (!step) return "夜间行动已完成，法官确认死亡信息后可以天亮。";
-    const wolfAction = [...(room.nightActions || [])]
-      .reverse()
-      .find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
-    const killedSeat = wolfAction && wolfAction.targetSeats && wolfAction.targetSeats[0];
+    const killedSeat = getWitchAntidoteTarget(room);
     const scripts = {
       mixed_blood_model: "混血儿请睁眼，请选择你的榜样。选择后闭眼。",
       wolves_kill: "狼人请睁眼，请确认同伴，并选择今晚击杀目标；也可以空刀。选择后闭眼。",
@@ -664,6 +677,12 @@
     return `${seat}号具体身份：${role.name}，请告知机械狼。`;
   }
 
+  function getNightResultHtml(room, step, targetSeats) {
+    if (!step || !["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id)) return "";
+    const text = getNightResultText(room, step, targetSeats);
+    return `<section class="panel result-panel"><div class="label">告知结果</div><div class="value" id="nightResult">${escapeHtml(text)}</div></section>`;
+  }
+
   function updateNightResultDisplay(room, step) {
     const result = app.querySelector("#nightResult");
     if (!result) return;
@@ -677,10 +696,42 @@
     groups[key].items.push(detail);
   }
 
+  function roleNameAtSeat(room, seat) {
+    const assignment = (room.assignments || []).find((item) => item.seat === seat);
+    const role = assignment ? getRole(assignment.roleId) : null;
+    return role ? role.name : "";
+  }
+
+  function seerResultAtSeat(room, seat) {
+    const assignment = (room.assignments || []).find((item) => item.seat === seat);
+    if (!assignment) return "";
+    return assignment.camp === "WOLF" ? "狼人" : "好人";
+  }
+
+  function formatReviewNightAction(room, action) {
+    const seats = action.targetSeats || [];
+    const seatText = formatSeatList(seats);
+    if (action.stepId === "wolves_kill") return action.skipped ? "狼人空刀" : `狼人刀 ${seatText}`;
+    if (action.stepId === "witch_antidote") return action.skipped ? "女巫不救" : `女巫救 ${seatText}`;
+    if (action.stepId === "witch_poison") return action.skipped ? "女巫不用毒" : `女巫毒 ${seatText}`;
+    if (action.stepId === "seer_check") return `预言家验 ${seatText}${seats[0] ? `（${seerResultAtSeat(room, seats[0])}）` : ""}`;
+    if (action.stepId === "spirit_medium_check") return `通灵师验 ${seatText}${seats[0] ? `（${roleNameAtSeat(room, seats[0])}）` : ""}`;
+    if (action.stepId === "mechanical_mimic") return `机械狼模仿 ${seatText}${seats[0] ? `（${roleNameAtSeat(room, seats[0])}）` : ""}`;
+    if (action.stepId === "treasure_pick") return `盗宝大师选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}`;
+    if (action.stepId === "guard_guard") return action.skipped ? "守卫空守" : `守卫守 ${seatText}`;
+    if (action.stepId === "poisoner_poison") return action.skipped ? "毒师不用毒" : `毒师毒 ${seatText}`;
+    if (action.stepId === "dreamer_dream") return `摄梦人摄 ${seatText}`;
+    if (action.stepId === "mixed_blood_model") return `混血儿选择榜样 ${seatText}`;
+    if (action.stepId === "dancer_dance") return `舞者选择舞池 ${seatText}`;
+    if (action.stepId === "mask_check") return `假面验证 ${seatText}`;
+    if (action.stepId === "mask_give") return `假面给面具 ${seatText}`;
+    return `${action.label || "夜间行动"}${action.skipped ? "：空过" : action.cardRoleId ? `：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}` : seats.length ? `：${seatText}` : ""}`;
+  }
+
   function buildReviewTimeline(room) {
     const groups = {};
     (room.nightActions || []).forEach((action) => {
-      const detail = `${action.label || "夜间行动"}${action.skipped ? "：空过" : action.cardRoleId ? `：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}` : action.targetSeats && action.targetSeats.length ? `：${formatSeatList(action.targetSeats)}` : ""}`;
+      const detail = formatReviewNightAction(room, action);
       pushTimelineItem(groups, `night-${action.night}`, `第 ${action.night} 天夜晚`, detail);
     });
     (room.deathRecords || []).forEach((record) => {
@@ -1205,6 +1256,7 @@
       : [];
     const currentNightActions = (room.nightActions || []).filter((action) => action.night === room.night);
     const suggestedDeaths = calculateSuggestedDeaths(room, room.night);
+    const witchAntidoteTarget = step && step.id === "witch_antidote" ? getWitchAntidoteTarget(room) : 0;
 
     if (!step) {
       app.innerHTML = `
@@ -1235,7 +1287,13 @@
         <div class="body-text">${getJudgeScript(step, room)}</div>
       </section>
 
-      ${step.needsCard ? `
+      ${step.id === "witch_antidote" ? `
+        <section class="panel">
+          <div class="label">今晚死亡信息</div>
+          <div class="value">${witchAntidoteTarget ? `${witchAntidoteTarget}号` : "无人"}</div>
+          <div class="notice">解药只记录“救”或“不救”。使用后，后续夜晚将跳过解药环节。</div>
+        </section>
+      ` : step.needsCard ? `
         <section class="panel">
           <div class="label">选择盗宝牌</div>
           <div class="card-options">
@@ -1248,8 +1306,8 @@
           <section class="seat-grid">
             ${room.seats.map((seat) => `<button class="seat" data-action="night-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
           </section>
-          ${["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id) ? `<div class="notice result-notice" id="nightResult">${escapeHtml(getNightResultText(room, step, []))}</div>` : ""}
         </section>
+        ${getNightResultHtml(room, step, [])}
       `}
 
       <section class="panel">
@@ -1263,8 +1321,8 @@
       <section class="panel action-panel">
         <div class="label">本步操作</div>
         <div class="action-row">
-          <button class="button primary" data-action="night-submit">确认记录</button>
-          ${step.allowSkip ? '<button class="button" data-action="night-skip">空过</button>' : ""}
+          <button class="button primary" data-action="night-submit">${step.id === "witch_antidote" ? "救" : "确认记录"}</button>
+          ${step.allowSkip ? `<button class="button" data-action="night-skip">${step.id === "witch_antidote" ? "不救" : "空过"}</button>` : ""}
           ${currentNightActions.length ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
           <button class="button" data-action="view" data-view="room">返回房间</button>
         </div>
@@ -1676,7 +1734,7 @@
         }
         room.night = (room.night || 0) + 1;
         room.phase = "NIGHT";
-        room.currentNightSteps = createNightSteps(room.boardId, room.night);
+        room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
         room.currentNightStepIndex = 0;
         room.nightActions = room.nightActions || [];
         writeLog(room, "NIGHT_STARTED", { night: room.night });
@@ -1740,9 +1798,17 @@
       const step = room.currentNightSteps[room.currentNightStepIndex || 0];
       if (!step) return;
       const skipped = action === "night-skip";
-      const targetSeats = Array.from(app.querySelectorAll(".seat.selected")).map((item) => Number(item.dataset.seat));
+      let targetSeats = Array.from(app.querySelectorAll(".seat.selected")).map((item) => Number(item.dataset.seat));
       const selectedCard = app.querySelector(".card-option.selected");
       const cardRoleId = selectedCard ? selectedCard.dataset.role : "";
+      if (step.id === "witch_antidote" && !skipped) {
+        const savedSeat = getWitchAntidoteTarget(room);
+        if (!savedSeat) {
+          window.alert("今晚无人死亡，不能使用解药");
+          return;
+        }
+        targetSeats = [savedSeat];
+      }
 
       if (!skipped && !step.needsCard && targetSeats.length !== step.targetCount) {
         window.alert(`需要选择 ${step.targetCount} 个目标`);

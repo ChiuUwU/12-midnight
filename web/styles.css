@@ -389,6 +389,11 @@ select {
   font-weight: 780;
 }
 
+.result-panel {
+  border-color: rgba(38, 60, 104, 0.34);
+  background: #f4f7fb;
+}
+
 .field {
   display: grid;
   gap: 8px;

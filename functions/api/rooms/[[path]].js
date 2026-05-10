@@ -230,7 +230,11 @@ function dealBoard(boardId, seats) {
   return assignCards(seats, cards);
 }
 
-function createNightSteps(boardId, night) {
+function hasUsedNightStep(room, stepId) {
+  return (room && room.nightActions || []).some((action) => action.stepId === stepId && !action.skipped);
+}
+
+function createNightSteps(boardId, night, room = null) {
   const firstNight = night === 1;
   const steps = [];
   if (boardId === "pre_witch_hunter_idiot_mixed") {
@@ -273,7 +277,9 @@ function createNightSteps(boardId, night) {
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
   }
-  return steps.map((step, index) => ({ ...step, index }));
+  return steps
+    .filter((step) => !(step.id === "witch_antidote" && hasUsedNightStep(room, "witch_antidote")))
+    .map((step, index) => ({ ...step, index }));
 }
 
 async function readBody(request) {
@@ -544,7 +550,7 @@ async function handleRoomAction(request, env, route) {
     if (room.phase !== "DEALT" && room.phase !== "DAY") return error(400, "当前阶段不能开始夜晚");
     room.night += 1;
     room.phase = "NIGHT";
-    room.currentNightSteps = createNightSteps(room.boardId, room.night);
+    room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
     room.currentNightStepIndex = 0;
     writeLog(room, "NIGHT_STARTED", { night: room.night });
   } else if (route.action === "night-action") {
