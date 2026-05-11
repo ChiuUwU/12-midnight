@@ -637,10 +637,14 @@ async function handleRoomAction(request, env, route) {
     const activeCandidates = candidates.filter((seat) => !withdrawn.includes(seat));
     const round = Number(body.round || 1);
     const allowedTargets = round === 1 ? activeCandidates : uniqueSeats(body.pkSeats, activeCandidates);
+    const allowedVoters = room.seats
+      .map((seat) => seat.seat)
+      .filter((seat) => round === 1 ? !candidates.includes(seat) : !activeCandidates.includes(seat));
     const counts = {};
     allowedTargets.forEach((seat) => { counts[seat] = 0; });
     const votes = Array.isArray(body.votes) ? body.votes : [];
-    votes.forEach((vote) => {
+    const validVotes = votes.filter((vote) => allowedVoters.includes(Number(vote.voterSeat)));
+    validVotes.forEach((vote) => {
       const targetSeat = Number(vote.targetSeat);
       if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
     });
@@ -650,7 +654,7 @@ async function handleRoomAction(request, env, route) {
     const badgeLost = round === 2 && !electedSeat;
     const record = {
       round,
-      votes,
+      votes: validVotes,
       counts,
       topSeats,
       electedSeat,

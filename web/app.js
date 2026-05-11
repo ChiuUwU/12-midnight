@@ -1092,8 +1092,8 @@
     const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
     const sheriffElectionDone = isSheriffElectionFinished(room);
     const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
-    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && sheriffElectionDone;
-    const canRunDayActions = room.phase === "DAY" && isJudge && (room.night !== 1 || daybreakRecorded);
+    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && sheriffElectionDone && !daybreakRecorded;
+    const canRunDayActions = room.phase === "DAY" && isJudge && daybreakRecorded;
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
     const judgeNextStep = getJudgeNextStep(room);
@@ -1392,16 +1392,14 @@
     const targets = secondRound ? previous.pkSeats : activeCandidates;
     const voters = room.seats
       .map((seat) => seat.seat)
-      .filter((seat) => {
-        if (secondRound) return !targets.includes(seat);
-        return !withdrawn.includes(seat);
-      });
+      .filter((seat) => secondRound ? !activeCandidates.includes(seat) : !candidates.includes(seat));
 
     app.innerHTML = `
-      ${pageHeader(secondRound ? "警徽 PK 投票" : "警徽投票", secondRound ? `PK 玩家：${formatSeatList(targets)}。除 PK 玩家外所有人投票。` : "退水玩家不参与第一轮警徽投票。")}
+      ${pageHeader(secondRound ? "警徽 PK 投票" : "警徽投票", secondRound ? `PK 玩家：${formatSeatList(targets)}。当前不在警上的玩家投票，退水玩家可投。` : "只有一开始就在警下的玩家投第一轮票。")}
       <section class="panel">
         <div class="label">候选目标</div>
         <div class="body-text">${formatSeatList(targets)}</div>
+        <div class="notice">投票人：${formatSeatList(voters)}</div>
       </section>
       <section class="panel">
         <div class="label">逐个记录投票</div>
@@ -1965,10 +1963,13 @@
         const withdrawn = room.sheriffWithdrawn || [];
         const activeCandidates = candidates.filter((seat) => !withdrawn.includes(seat));
         const allowedTargets = round === 1 ? activeCandidates : pkSeats;
+        const allowedVoters = room.seats
+          .map((seat) => seat.seat)
+          .filter((seat) => round === 1 ? !candidates.includes(seat) : !activeCandidates.includes(seat));
         const counts = {};
         allowedTargets.forEach((seat) => { counts[seat] = 0; });
         votes.forEach((vote) => {
-          if (allowedTargets.includes(vote.targetSeat)) counts[vote.targetSeat] += 1;
+          if (allowedVoters.includes(vote.voterSeat) && allowedTargets.includes(vote.targetSeat)) counts[vote.targetSeat] += 1;
         });
         const maxVotes = Math.max(0, ...Object.values(counts));
         const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
@@ -1976,7 +1977,7 @@
         const badgeLost = round === 2 && !electedSeat;
         const record = {
           round,
-          votes,
+          votes: votes.filter((vote) => allowedVoters.includes(vote.voterSeat)),
           counts,
           topSeats,
           electedSeat,

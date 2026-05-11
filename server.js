@@ -469,10 +469,14 @@ async function handleApi(request, response, url) {
     const allowedTargets = round === 1
       ? activeCandidates
       : Array.isArray(body.pkSeats) ? body.pkSeats.map(Number).filter((seat) => activeCandidates.includes(seat)) : [];
+    const allowedVoters = room.seats
+      .map((seat) => seat.seat)
+      .filter((seat) => round === 1 ? !candidates.includes(seat) : !activeCandidates.includes(seat));
 
     const counts = {};
     allowedTargets.forEach((seat) => { counts[seat] = 0; });
-    votes.forEach((vote) => {
+    const validVotes = votes.filter((vote) => allowedVoters.includes(Number(vote.voterSeat)));
+    validVotes.forEach((vote) => {
       const targetSeat = Number(vote.targetSeat);
       if (allowedTargets.includes(targetSeat)) {
         counts[targetSeat] += 1;
@@ -484,7 +488,7 @@ async function handleApi(request, response, url) {
     const badgeLost = round === 2 && !electedSeat;
     const record = {
       round,
-      votes,
+      votes: validVotes,
       counts,
       topSeats,
       electedSeat,
