@@ -1,4 +1,5 @@
 (function () {
+  document.title = "最后一夜 Last-Night";
   const STORAGE_KEY = "twelve_midnight_web_state_v1";
   const app = document.querySelector("#app");
   const IS_REMOTE = location.protocol === "http:" || location.protocol === "https:";
