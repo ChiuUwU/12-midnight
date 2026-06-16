@@ -355,6 +355,24 @@
     return seats && seats.length ? seats.map((seat) => `${seat}号`).join("、") : "无";
   }
 
+  function buildSpeakingOrder(startSeat, direction) {
+    return Array.from({ length: 12 }, (_, index) => {
+      const offset = direction === "REVERSE" ? -index : index;
+      return ((startSeat - 1 + offset + 12) % 12) + 1;
+    });
+  }
+
+  function createSpeakingDraw() {
+    const startSeat = Math.floor(Math.random() * 12) + 1;
+    const direction = Math.random() < 0.5 ? "FORWARD" : "REVERSE";
+    return {
+      startSeat,
+      direction,
+      directionName: direction === "FORWARD" ? "顺序" : "逆序",
+      order: buildSpeakingOrder(startSeat, direction)
+    };
+  }
+
   function latestRecord(records) {
     return records && records.length ? records[records.length - 1] : null;
   }
@@ -928,6 +946,10 @@
           <span class="action-title">加入房间</span>
           <span class="action-note">输入房间号进入座位</span>
         </button>
+        <button class="action-card" data-action="view" data-view="randomizer">
+          <span class="action-title">发言顺序</span>
+          <span class="action-note">随机起点和顺逆序</span>
+        </button>
       </section>
 
       ${hasRoom ? `
@@ -1030,6 +1052,19 @@
     });
   }
 
+  function renderRandomizer() {
+    const backView = getCurrentRoom() ? "room" : "home";
+    app.innerHTML = `
+      ${pageHeader("发言顺序", "随机 1-12 号，并随机顺序或逆序")}
+      <section class="panel randomizer-panel">
+        <div class="label">抽取结果</div>
+        <div id="randomizerResult" class="randomizer-empty">点击下方按钮开始随机</div>
+      </section>
+      <button class="button primary" data-action="random-speaking">随机发言顺序</button>
+      <button class="button" data-action="view" data-view="${backView}">${backView === "room" ? "返回房间" : "返回首页"}</button>
+    `;
+  }
+
   function renderJoin() {
     app.innerHTML = `
       ${pageHeader("加入房间", IS_REMOTE ? "输入房间号加入同一个联机房间" : "当前静态网页版只能加入本机浏览器创建过的房间")}
@@ -1118,6 +1153,7 @@
       room.phase !== "WAITING" ? '<button class="button primary" data-action="view" data-view="identity">查看我的身份</button>' : "",
       (room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="judge">法官总览</button>' : "",
       (room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="review">复盘</button>' : "",
+      '<button class="button" data-action="view" data-view="randomizer">随机发言顺序</button>',
       IS_REMOTE ? '<button class="button" data-action="refresh-room">刷新房间</button>' : ""
     ];
     const dangerActions = [
@@ -1617,6 +1653,7 @@
 
   function render() {
     if (state.view === "create") return renderCreate();
+    if (state.view === "randomizer") return renderRandomizer();
     if (state.view === "join") return renderJoin();
     if (state.view === "room") return renderRoom();
     if (state.view === "identity") return renderIdentity();
@@ -1652,6 +1689,23 @@
       } catch (error) {
         window.prompt("复制这个链接发给玩家", shareUrl);
       }
+      return;
+    }
+
+    if (action === "random-speaking") {
+      const result = createSpeakingDraw();
+      const container = app.querySelector("#randomizerResult");
+      if (!container) return;
+      container.className = "randomizer-result";
+      container.innerHTML = `
+        <div class="randomizer-main">
+          <span>${result.startSeat}号</span>
+          <span>${result.directionName}</span>
+        </div>
+        <div class="randomizer-order">
+          ${result.order.map((seat) => `<span class="order-seat ${seat === result.startSeat ? "start" : ""}">${seat}</span>`).join("")}
+        </div>
+      `;
       return;
     }
 
