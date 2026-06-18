@@ -234,6 +234,19 @@ function hasUsedNightStep(room, stepId) {
   return (room && room.nightActions || []).some((action) => action.stepId === stepId && !action.skipped);
 }
 
+function getAvailableDanceSeats(room) {
+  if (!room) return [];
+  const dancedSeats = new Set(
+    (room.nightActions || [])
+      .filter((action) => action.stepId === "dancer_dance" && !action.skipped)
+      .flatMap((action) => action.targetSeats || [])
+  );
+  return (room.assignments || [])
+    .filter((assignment) => assignment.alive !== false && !dancedSeats.has(assignment.seat))
+    .map((assignment) => assignment.seat)
+    .sort((left, right) => left - right);
+}
+
 function createNightSteps(boardId, night, room = null) {
   const firstNight = night === 1;
   const steps = [];
@@ -252,11 +265,16 @@ function createNightSteps(boardId, night, room = null) {
       { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
       { id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false }
     );
-    if (!firstNight) steps.push({ id: "dancer_dance", actor: "dancer", label: "舞者选择三名共舞玩家", targetCount: 3, allowSkip: false });
-    steps.push(
-      { id: "mask_check", actor: "mask", label: "假面验证是否在舞池", targetCount: 1, allowSkip: false },
-      { id: "mask_give", actor: "mask", label: "假面给予面具", targetCount: 1, allowSkip: false }
-    );
+    if (!firstNight) {
+      const availableDanceSeats = getAvailableDanceSeats(room);
+      if (availableDanceSeats.length >= 3) {
+        steps.push({ id: "dancer_dance", actor: "dancer", label: "舞者选择三名共舞玩家", targetCount: 3, allowSkip: false, allowedSeats: availableDanceSeats });
+      }
+      steps.push(
+        { id: "mask_check", actor: "mask", label: "假面验证是否在舞池", targetCount: 1, allowSkip: false },
+        { id: "mask_give", actor: "mask", label: "假面给予面具", targetCount: 1, allowSkip: false }
+      );
+    }
   } else if (boardId === "treasure_master") {
     steps.push(
       { id: "treasure_pick", actor: "treasure_master", label: "盗宝大师选择今晚使用的盗宝牌", targetCount: 0, allowSkip: false, needsCard: true },
@@ -419,6 +437,9 @@ function calculateDayVote(room, body) {
 
 function validateNightAction(room, step, targetSeats, skipped) {
   if (skipped) return "";
+  if (Array.isArray(step.allowedSeats) && targetSeats.some((seat) => !step.allowedSeats.includes(seat))) {
+    return "所选玩家不符合当前技能的可选范围";
+  }
   if (step.id === "guard_guard") {
     const lastGuard = [...(room.nightActions || [])]
       .reverse()

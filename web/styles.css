@@ -518,6 +518,10 @@ select {
   border-color: #8f241a;
 }
 
+.seat.unavailable {
+  opacity: 0.35;
+}
+
 .list {
   margin-top: 8px;
 }
