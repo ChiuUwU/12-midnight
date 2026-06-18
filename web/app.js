@@ -659,12 +659,11 @@
 
   function getJudgeScript(step, room) {
     if (!step) return "夜间行动已完成，法官确认死亡信息后可以天亮。";
-    const killedSeat = getWitchAntidoteTarget(room);
     const scripts = {
       mixed_blood_model: "混血儿请睁眼，请选择你的榜样。选择后闭眼。",
       wolves_kill: "狼人请睁眼，请确认同伴，并选择今晚击杀目标；也可以空刀。选择后闭眼。",
-      witch_antidote: `女巫请睁眼，今晚死亡信息为${killedSeat ? `${killedSeat}号` : "无人"}，是否使用解药？选择后闭眼。`,
-      witch_poison: "女巫请继续操作，是否使用毒药？选择目标或空过后闭眼。",
+      witch_antidote: "今晚该玩家被击杀，使用解药比出手势，使用毒药请给出号码。",
+      witch_poison: "使用毒药请给出号码，不使用毒药请示意。",
       seer_check: "预言家请睁眼，请查验一名玩家。法官线下只告知好人或狼人，不告知具体身份；预言家闭眼。",
       dancer_dance: "舞者请睁眼，请选择三名玩家进入舞池。选择后闭眼。",
       mask_check: "假面请睁眼，请验证一名玩家是否在舞池中。记录后继续。",
