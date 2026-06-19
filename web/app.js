@@ -6,6 +6,37 @@
   const AUTO_REFRESH_VIEWS = ["room", "identity", "judge", "review"];
   const PRELOAD_IMAGES = ["assets/app-icon.png"];
 
+  const RANDOM_POOL = new Uint32Array(4096);
+  let randomPoolIndex = RANDOM_POOL.length;
+
+  function nextSecureUint32() {
+    if (randomPoolIndex >= RANDOM_POOL.length) {
+      crypto.getRandomValues(RANDOM_POOL);
+      randomPoolIndex = 0;
+    }
+    const value = RANDOM_POOL[randomPoolIndex];
+    randomPoolIndex += 1;
+    return value;
+  }
+
+  function secureRandomInt(maxExclusive) {
+    if (!Number.isInteger(maxExclusive) || maxExclusive <= 0) throw new Error("随机数范围不合法");
+    const maximum = 0x100000000;
+    const limit = Math.floor(maximum / maxExclusive) * maxExclusive;
+    let value;
+    do {
+      value = nextSecureUint32();
+    } while (value >= limit);
+    return value % maxExclusive;
+  }
+
+  function createBalanceProfileId() {
+    if (crypto.randomUUID) return crypto.randomUUID();
+    const values = new Uint8Array(16);
+    crypto.getRandomValues(values);
+    return Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
+  }
+
   const DEFAULT_RULES = {
     winCondition: "KILL_SIDE",
     sheriffEnabled: true,
@@ -318,6 +349,8 @@
   function createInitialState() {
     return {
       currentUserId: `user-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`,
+      balanceProfileId: createBalanceProfileId(),
+      dealHistory: [],
       currentRoomId: "",
       view: "home",
       remoteRoom: null,
@@ -336,6 +369,8 @@
         ...saved,
         rooms: saved.rooms || {},
         judgeTokens: saved.judgeTokens || {},
+        balanceProfileId: saved.balanceProfileId || initial.balanceProfileId,
+        dealHistory: Array.isArray(saved.dealHistory) ? saved.dealHistory.slice(-10) : [],
         deathDraftSeats: saved.deathDraftSeats || [],
         remoteRoom: null
       };
@@ -374,6 +409,7 @@
       day: 0,
       night: 0,
       judgeUserId: state.currentUserId,
+      balanceProfileId: state.balanceProfileId,
       seats: createSeats(),
       assignments: [],
       logs: [],
@@ -1011,7 +1047,7 @@
   function shuffle(cards) {
     const result = cards.slice();
     for (let index = result.length - 1; index > 0; index -= 1) {
-      const swapIndex = Math.floor(Math.random() * (index + 1));
+      const swapIndex = secureRandomInt(index + 1);
       const current = result[index];
       result[index] = result[swapIndex];
       result[swapIndex] = current;
@@ -1036,7 +1072,7 @@
       if (excludes.includes(card.roleId)) return false;
       return true;
     });
-    const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+    const chosen = candidates[secureRandomInt(candidates.length)];
     return removeOne(cards, chosen.roleId);
   }
 
@@ -1219,6 +1255,7 @@
             method: "POST",
             body: JSON.stringify({
               clientId: state.currentUserId,
+              balanceProfileId: state.balanceProfileId,
               mode: selectedMode,
               boardId: app.querySelector("#boardSelect").value
             })
@@ -2679,7 +2716,15 @@
           return;
         }
         const seats = room.seats.map((seat) => seat.seat);
-        room.assignments = dealBoard(room.boardId, seats);
+        const balanced = window.BalancedDeal.createBalancedDeal({
+          boardId: room.boardId,
+          history: state.dealHistory,
+          randomInt: secureRandomInt,
+          createCandidate: () => dealBoard(room.boardId, seats)
+        });
+        room.assignments = balanced.assignments;
+        room.dealBalanceMeta = balanced.meta;
+        state.dealHistory = balanced.history;
         room.phase = "DEALT";
         writeLog(room, "DEALT", { boardId: room.boardId });
         saveState();

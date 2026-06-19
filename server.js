@@ -4,12 +4,14 @@ const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
 const { dealBoard } = require("./miniprogram/utils/deal");
+const { createBalancedDeal } = require("./web/balanced-deal");
 
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || "0.0.0.0";
 const WEB_ROOT = path.join(__dirname, "web");
 const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
 const rooms = new Map();
+const dealHistories = new Map();
 
 function createSeats() {
   return Array.from({ length: 12 }, (_, index) => ({
@@ -264,6 +266,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     sheriffVoteRecord: room.sheriffVoteRecord || null,
     sheriffBadge: room.sheriffBadge || { holderSeat: 0, lost: false },
     dayVoteRecord: room.dayVoteRecord || null,
+    dealBalanceMeta: judge ? room.dealBalanceMeta || null : null,
     pendingExileResult: judge ? room.pendingExileResult || null : null,
     orderPrinceUsed: Boolean(room.orderPrinceUsed),
     orderPrinceRevotePending: judge ? Boolean(room.orderPrinceRevotePending) : false,
@@ -386,6 +389,7 @@ async function handleApi(request, response, url) {
       day: 0,
       night: 0,
       judgeClientId: body.clientId,
+      balanceProfileId: body.balanceProfileId || body.clientId,
       judgeToken: crypto.randomBytes(18).toString("hex"),
       judgeCode: createJudgeCode(),
       seats: createSeats(),
@@ -496,7 +500,17 @@ async function handleApi(request, response, url) {
     if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以发牌");
     if (room.phase !== "WAITING") return sendError(response, 400, "已经发过牌");
     if (room.seats.some((seat) => !seat.occupied)) return sendError(response, 400, "需要 12 人满座才能发牌");
-    room.assignments = dealBoard(room.boardId, room.seats.map((seat) => seat.seat));
+    const seats = room.seats.map((seat) => seat.seat);
+    const profileId = room.balanceProfileId || room.judgeClientId;
+    const balanced = createBalancedDeal({
+      boardId: room.boardId,
+      history: dealHistories.get(profileId) || [],
+      randomInt: (maximum) => crypto.randomInt(maximum),
+      createCandidate: () => dealBoard(room.boardId, seats)
+    });
+    room.assignments = balanced.assignments;
+    room.dealBalanceMeta = balanced.meta;
+    dealHistories.set(profileId, balanced.history);
     room.phase = "DEALT";
     writeLog(room, "DEALT", { boardId: room.boardId });
     return sendJson(response, 200, {

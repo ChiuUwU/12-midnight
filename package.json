@@ -4,7 +4,8 @@
   "private": true,
   "description": "十二点天黑：狼人杀发牌和法官流程辅助网页工具",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "test": "node --test tests/*.test.js"
   },
   "engines": {
     "node": ">=18"

@@ -1,3 +1,7 @@
+import "../../../web/balanced-deal.js";
+
+const { createBalancedDeal } = globalThis.BalancedDeal;
+
 const DEFAULT_RULES = {
   winCondition: "KILL_SIDE",
   sheriffEnabled: true,
@@ -129,6 +133,30 @@ function randomHex(bytesLength) {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+const RANDOM_POOL = new Uint32Array(4096);
+let randomPoolIndex = RANDOM_POOL.length;
+
+function nextSecureUint32() {
+  if (randomPoolIndex >= RANDOM_POOL.length) {
+    crypto.getRandomValues(RANDOM_POOL);
+    randomPoolIndex = 0;
+  }
+  const value = RANDOM_POOL[randomPoolIndex];
+  randomPoolIndex += 1;
+  return value;
+}
+
+function secureRandomInt(maxExclusive) {
+  if (!Number.isInteger(maxExclusive) || maxExclusive <= 0) throw new Error("随机数范围不合法");
+  const maximum = 0x100000000;
+  const limit = Math.floor(maximum / maxExclusive) * maxExclusive;
+  let value;
+  do {
+    value = nextSecureUint32();
+  } while (value >= limit);
+  return value % maxExclusive;
+}
+
 function createSeats() {
   return Array.from({ length: 12 }, (_, index) => ({
     seat: index + 1,
@@ -165,9 +193,7 @@ function flattenEntries(entries) {
 function shuffle(cards) {
   const result = cards.slice();
   for (let index = result.length - 1; index > 0; index -= 1) {
-    const bytes = new Uint8Array(1);
-    crypto.getRandomValues(bytes);
-    const swapIndex = bytes[0] % (index + 1);
+    const swapIndex = secureRandomInt(index + 1);
     const current = result[index];
     result[index] = result[swapIndex];
     result[swapIndex] = current;
@@ -190,9 +216,7 @@ function pickTreasureGodCard(cards, board) {
     return true;
   });
   if (!candidates.length) throw new Error("盗宝神职牌池为空");
-  const bytes = new Uint8Array(1);
-  crypto.getRandomValues(bytes);
-  const chosen = candidates[bytes[0] % candidates.length];
+  const chosen = candidates[secureRandomInt(candidates.length)];
   return removeOne(cards, chosen.roleId);
 }
 
@@ -413,6 +437,34 @@ async function saveRoom(env, room) {
 
 async function cleanupExpiredRooms(env) {
   await env.DB.prepare("DELETE FROM rooms WHERE updated_at < ?").bind(Date.now() - ROOM_TTL_MS).run();
+  await ensureDealHistoryTable(env);
+  await env.DB.prepare("DELETE FROM deal_histories WHERE updated_at < ?").bind(Date.now() - 90 * 24 * 60 * 60 * 1000).run();
+}
+
+async function ensureDealHistoryTable(env) {
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS deal_histories (profile_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)"
+  ).run();
+}
+
+async function loadDealHistory(env, profileId) {
+  await ensureDealHistoryTable(env);
+  const row = await env.DB.prepare("SELECT data FROM deal_histories WHERE profile_id = ?").bind(profileId).first();
+  if (!row) return [];
+  try {
+    const history = JSON.parse(row.data);
+    return Array.isArray(history) ? history.slice(-10) : [];
+  } catch (error) {
+    return [];
+  }
+}
+
+async function saveDealHistory(env, profileId, history) {
+  await ensureDealHistoryTable(env);
+  await env.DB.prepare(
+    "INSERT INTO deal_histories (profile_id, data, updated_at) VALUES (?, ?, ?) " +
+    "ON CONFLICT(profile_id) DO UPDATE SET data = excluded.data, updated_at = excluded.updated_at"
+  ).bind(profileId, JSON.stringify(history.slice(-10)), Date.now()).run();
 }
 
 async function createRoomId(env) {
@@ -455,6 +507,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     sheriffVoteRecord: room.sheriffVoteRecord || null,
     sheriffBadge: room.sheriffBadge || { holderSeat: 0, lost: false },
     dayVoteRecord: room.dayVoteRecord || null,
+    dealBalanceMeta: judge ? room.dealBalanceMeta || null : null,
     pendingExileResult: judge ? room.pendingExileResult || null : null,
     orderPrinceUsed: Boolean(room.orderPrinceUsed),
     orderPrinceRevotePending: judge ? Boolean(room.orderPrinceRevotePending) : false,
@@ -571,6 +624,7 @@ async function handleCreateRoom(request, env) {
     day: 0,
     night: 0,
     judgeClientId: body.clientId,
+    balanceProfileId: body.balanceProfileId || body.clientId,
     judgeToken: randomHex(18),
     judgeCode: randomDigits(4),
     seats: createSeats(),
@@ -660,7 +714,18 @@ async function handleRoomAction(request, env, route) {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以发牌");
     if (room.phase !== "WAITING") return error(400, "已经发过牌");
     if (room.seats.some((seat) => !seat.occupied)) return error(400, "需要 12 人满座才能发牌");
-    room.assignments = dealBoard(room.boardId, room.seats.map((seat) => seat.seat));
+    const seats = room.seats.map((seat) => seat.seat);
+    const profileId = room.balanceProfileId || room.judgeClientId;
+    const history = await loadDealHistory(env, profileId);
+    const balanced = createBalancedDeal({
+      boardId: room.boardId,
+      history,
+      randomInt: secureRandomInt,
+      createCandidate: () => dealBoard(room.boardId, seats)
+    });
+    room.assignments = balanced.assignments;
+    room.dealBalanceMeta = balanced.meta;
+    await saveDealHistory(env, profileId, balanced.history);
     room.phase = "DEALT";
     writeLog(room, "DEALT", { boardId: room.boardId });
   } else if (route.action === "reveal") {

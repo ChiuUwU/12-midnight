@@ -7,3 +7,10 @@ CREATE TABLE IF NOT EXISTS rooms (
 
 CREATE INDEX IF NOT EXISTS idx_rooms_updated_at ON rooms(updated_at);
 
+CREATE TABLE IF NOT EXISTS deal_histories (
+  profile_id TEXT PRIMARY KEY,
+  data TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_deal_histories_updated_at ON deal_histories(updated_at);

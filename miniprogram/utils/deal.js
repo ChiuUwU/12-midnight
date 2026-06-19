@@ -1,4 +1,5 @@
 const { getBoard } = require("../data/boards");
+const crypto = require("crypto");
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -20,7 +21,7 @@ function flattenEntries(entries) {
 function shuffle(cards) {
   const result = cards.slice();
   for (let index = result.length - 1; index > 0; index -= 1) {
-    const swapIndex = Math.floor(Math.random() * (index + 1));
+    const swapIndex = crypto.randomInt(index + 1);
     const current = result[index];
     result[index] = result[swapIndex];
     result[swapIndex] = current;
@@ -50,7 +51,7 @@ function pickTreasureGodCard(cards, board) {
     throw new Error("盗宝神职牌池为空");
   }
 
-  const chosen = candidates[Math.floor(Math.random() * candidates.length)];
+  const chosen = candidates[crypto.randomInt(candidates.length)];
   return removeOne(cards, chosen.roleId);
 }
 
