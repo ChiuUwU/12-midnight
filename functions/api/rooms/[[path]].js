@@ -234,6 +234,27 @@ function hasUsedNightStep(room, stepId) {
   return (room && room.nightActions || []).some((action) => action.stepId === stepId && !action.skipped);
 }
 
+function hasUsedWitchAntidote(room) {
+  return (room && room.nightActions || []).some((action) =>
+    (action.stepId === "witch_antidote" && !action.skipped) ||
+    (action.stepId === "witch_action" && action.antidoteUsed)
+  );
+}
+
+function hasUsedWitchPoison(room) {
+  return (room && room.nightActions || []).some((action) =>
+    (action.stepId === "witch_poison" && !action.skipped) ||
+    (action.stepId === "witch_action" && Number(action.poisonTargetSeat) > 0)
+  );
+}
+
+function createWitchStep(room) {
+  const antidoteAvailable = !hasUsedWitchAntidote(room);
+  const poisonAvailable = !hasUsedWitchPoison(room);
+  if (!antidoteAvailable && !poisonAvailable) return null;
+  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable };
+}
+
 function getAvailableDanceSeats(room) {
   if (!room) return [];
   const dancedSeats = new Set(
@@ -252,19 +273,15 @@ function createNightSteps(boardId, night, room = null) {
   const steps = [];
   if (boardId === "pre_witch_hunter_idiot_mixed") {
     if (firstNight) steps.push({ id: "mixed_blood_model", actor: "mixed_blood", label: "混血儿选择榜样", targetCount: 1, allowSkip: false });
-    steps.push(
-      { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true },
-      { id: "witch_antidote", actor: "witch", label: "女巫选择是否救人", targetCount: 1, allowSkip: true },
-      { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
-      { id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false }
-    );
+    const witchStep = createWitchStep(room);
+    steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+    if (witchStep) steps.push(witchStep);
+    steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
   } else if (boardId === "masquerade") {
-    steps.push(
-      { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true },
-      { id: "witch_antidote", actor: "witch", label: "女巫选择是否救人", targetCount: 1, allowSkip: true },
-      { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
-      { id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false }
-    );
+    const witchStep = createWitchStep(room);
+    steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+    if (witchStep) steps.push(witchStep);
+    steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
     if (!firstNight) {
       const availableDanceSeats = getAvailableDanceSeats(room);
       if (availableDanceSeats.length >= 3) {
@@ -286,18 +303,18 @@ function createNightSteps(boardId, night, room = null) {
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
   } else if (boardId === "mechanical_wolf_spirit_medium") {
+    const witchStep = createWitchStep(room);
     steps.push(
       { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
-      { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true },
-      { id: "witch_antidote", actor: "witch", label: "女巫选择是否救人", targetCount: 1, allowSkip: true },
-      { id: "witch_poison", actor: "witch", label: "女巫选择是否毒人", targetCount: 1, allowSkip: true },
+      { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true }
+    );
+    if (witchStep) steps.push(witchStep);
+    steps.push(
       { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
   }
-  return steps
-    .filter((step) => !(step.id === "witch_antidote" && hasUsedNightStep(room, "witch_antidote")))
-    .map((step, index) => ({ ...step, index }));
+  return steps.map((step, index) => ({ ...step, index }));
 }
 
 async function readBody(request) {
@@ -582,6 +599,32 @@ async function handleRoomAction(request, env, route) {
     const targetSeats = uniqueSeats(body.targetSeats);
     const skipped = Boolean(body.skipped);
     const cardRoleId = body.cardRoleId || "";
+    if (step.id === "witch_action") {
+      const antidoteUsed = Boolean(body.antidoteUsed) && step.antidoteAvailable;
+      const wolfAction = [...room.nightActions].reverse().find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
+      const antidoteTargetSeat = antidoteUsed && wolfAction && wolfAction.targetSeats ? Number(wolfAction.targetSeats[0]) : 0;
+      if (antidoteUsed && !antidoteTargetSeat) return error(400, "今晚无人被击杀，不能使用解药");
+      const requestedPoisonSeat = Number(body.poisonTargetSeat || 0);
+      const poisonTargetSeat = step.poisonAvailable && requestedPoisonSeat >= 1 && requestedPoisonSeat <= 12 ? requestedPoisonSeat : 0;
+      if (requestedPoisonSeat && !poisonTargetSeat) return error(400, "毒药目标不合法或毒药已经使用");
+      const record = {
+        night: room.night,
+        stepId: step.id,
+        label: step.label,
+        targetSeats: [],
+        skipped: !antidoteUsed && !poisonTargetSeat,
+        cardRoleId: "",
+        antidoteUsed,
+        antidoteTargetSeat,
+        poisonTargetSeat,
+        createdAt: Date.now()
+      };
+      room.nightActions.push(record);
+      writeLog(room, "NIGHT_ACTION", record);
+      room.currentNightStepIndex += 1;
+      await saveRoom(env, room);
+      return json({ room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
     if (!skipped && !step.needsCard && targetSeats.length !== step.targetCount) return error(400, `需要选择 ${step.targetCount} 个目标`);
     if (skipped && !step.allowSkip) return error(400, "这个步骤不能跳过");
     if (step.needsCard && !cardRoleId) return error(400, "需要选择一张盗宝牌");

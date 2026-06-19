@@ -470,6 +470,10 @@ select {
   gap: 8px;
 }
 
+.witch-choice-row {
+  margin-top: 12px;
+}
+
 .segment {
   height: 42px;
   border: 1px solid var(--line);
