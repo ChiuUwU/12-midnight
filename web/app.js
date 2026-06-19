@@ -966,10 +966,6 @@
           <span class="action-title">加入房间</span>
           <span class="action-note">输入房间号进入座位</span>
         </button>
-        <button class="action-card" data-action="view" data-view="randomizer">
-          <span class="action-title">发言顺序</span>
-          <span class="action-note">随机起点和顺逆序</span>
-        </button>
       </section>
 
       ${hasRoom ? `
