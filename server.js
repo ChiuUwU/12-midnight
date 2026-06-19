@@ -75,7 +75,49 @@ function createWitchStep(room) {
   const antidoteAvailable = !hasUsedWitchAntidote(room);
   const poisonAvailable = !hasUsedWitchPoison(room);
   if (!antidoteAvailable && !poisonAvailable) return null;
-  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable };
+  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable, singlePotionPerNight: room && room.boardId === "realm_of_trickery" };
+}
+
+function getAvailableSwapSeats(room, stepId) {
+  const used = new Set((room && room.nightActions || []).filter((action) => action.stepId === stepId && !action.skipped).flatMap((action) => action.targetSeats || []).map(Number));
+  return (room && room.assignments || []).filter((assignment) => assignment.alive !== false && !used.has(assignment.seat)).map((assignment) => assignment.seat).sort((left, right) => left - right);
+}
+
+function didSkipPreviousNight(room, stepId, night) {
+  const previous = (room && room.nightActions || []).find((action) => action.night === night - 1 && action.stepId === stepId);
+  return Boolean(previous && previous.skipped);
+}
+
+function sameSeatPair(left, right) {
+  return Array.isArray(left) && Array.isArray(right) && left.length === 2 && right.length === 2 && [...left].map(Number).sort((a, b) => a - b).join(",") === [...right].map(Number).sort((a, b) => a - b).join(",");
+}
+
+function refreshSwapConflict(room, night) {
+  const actions = (room.nightActions || []).filter((action) => action.night === night && ["trickster_swap", "magician_swap"].includes(action.stepId));
+  actions.forEach((action) => { action.invalidByConflict = false; });
+  const trickster = actions.find((action) => action.stepId === "trickster_swap" && !action.skipped);
+  const magician = actions.find((action) => action.stepId === "magician_swap" && !action.skipped);
+  if (trickster && magician && sameSeatPair(trickster.targetSeats, magician.targetSeats)) {
+    trickster.invalidByConflict = true;
+    magician.invalidByConflict = true;
+  }
+}
+
+function getActiveSwapPair(room, stepId, night = room.night) {
+  const action = (room.nightActions || []).find((item) => item.night === night && item.stepId === stepId && !item.skipped && !item.invalidByConflict);
+  return action && action.targetSeats && action.targetSeats.length === 2 ? action.targetSeats.map(Number) : [];
+}
+
+function mapSeatWithPair(seat, pair) {
+  const value = Number(seat || 0);
+  if (pair.length !== 2) return value;
+  if (value === pair[0]) return pair[1];
+  if (value === pair[1]) return pair[0];
+  return value;
+}
+
+function mapExileSeat(room, seat, day = room.night) {
+  return room.boardId === "realm_of_trickery" ? mapSeatWithPair(seat, getActiveSwapPair(room, "trickster_swap", day)) : Number(seat || 0);
 }
 
 function getAvailableDanceSeats(room) {
@@ -136,6 +178,15 @@ function createNightSteps(boardId, night, room = null) {
       { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
+  } else if (boardId === "realm_of_trickery") {
+    const tricksterSeats = getAvailableSwapSeats(room, "trickster_swap");
+    const magicianSeats = getAvailableSwapSeats(room, "magician_swap");
+    const witchStep = createWitchStep(room);
+    if (tricksterSeats.length >= 2) common.push({ id: "trickster_swap", actor: "trickster", label: "诡术师交换两个号码", targetCount: 2, allowSkip: !didSkipPreviousNight(room, "trickster_swap", night), allowedSeats: tricksterSeats });
+    if (magicianSeats.length >= 2) common.push({ id: "magician_swap", actor: "magician", label: "魔术师交换两个号码", targetCount: 2, allowSkip: true, allowedSeats: magicianSeats });
+    common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+    if (witchStep) common.push(witchStep);
+    common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
   }
   return common.map((step, index) => ({ ...step, index }));
 }
@@ -213,6 +264,9 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     sheriffVoteRecord: room.sheriffVoteRecord || null,
     sheriffBadge: room.sheriffBadge || { holderSeat: 0, lost: false },
     dayVoteRecord: room.dayVoteRecord || null,
+    pendingExileResult: judge ? room.pendingExileResult || null : null,
+    orderPrinceUsed: Boolean(room.orderPrinceUsed),
+    orderPrinceRevotePending: judge ? Boolean(room.orderPrinceRevotePending) : false,
     judgeCode: judge ? room.judgeCode : "",
     deathRecords: room.deathRecords || [],
     exileRecords: room.exileRecords || []
@@ -261,6 +315,21 @@ function calculateDayVote(room, body) {
     noExile,
     createdAt: Date.now()
   };
+}
+
+function finalizeDayVote(room, record, source = "DAY_VOTE") {
+  const rawExiledSeat = Number(record.exiledSeat || 0);
+  const actualExiledSeat = rawExiledSeat ? mapExileSeat(room, rawExiledSeat, record.day) : 0;
+  record.rawExiledSeat = rawExiledSeat;
+  record.actualExiledSeat = actualExiledSeat;
+  record.exiledSeat = actualExiledSeat;
+  if (actualExiledSeat) {
+    const assignment = room.assignments.find((item) => item.seat === actualExiledSeat);
+    if (assignment) assignment.alive = false;
+  }
+  const exileRecord = { day: room.night, seat: actualExiledSeat, rawSeat: rawExiledSeat, noExile: record.noExile, source, createdAt: Date.now() };
+  room.exileRecords.push(exileRecord);
+  writeLog(room, "EXILE_CONFIRMED", exileRecord);
 }
 
 function validateNightAction(room, step, targetSeats, skipped) {
@@ -331,6 +400,9 @@ async function handleApi(request, response, url) {
       sheriffVoteRecord: null,
       sheriffBadge: { holderSeat: 0, lost: false },
       dayVoteRecord: null,
+      pendingExileResult: null,
+      orderPrinceUsed: false,
+      orderPrinceRevotePending: false,
       deathRecords: [],
       exileRecords: [],
       createdAt: Date.now(),
@@ -577,22 +649,19 @@ async function handleApi(request, response, url) {
   if (target.action === "day-vote") {
     if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录放逐投票");
     if (room.phase !== "DAY") return sendError(response, 400, "当前阶段不能记录放逐投票");
+    if (room.pendingExileResult) return sendError(response, 400, "请先处理定序王子的发动时机");
+    if (Boolean(body.orderPrinceRevote) !== Boolean(room.orderPrinceRevotePending)) return sendError(response, 400, "当前投票轮次与定序王子状态不一致");
     const record = calculateDayVote(room, body);
     room.dayVoteRecord = record;
+    const princeRevote = Boolean(body.orderPrinceRevote);
+    if (room.boardId === "realm_of_trickery" && record.round === 1 && !room.orderPrinceUsed && !princeRevote) {
+      room.pendingExileResult = { day: room.night, record, createdAt: Date.now() };
+      writeLog(room, "DAY_VOTE_PENDING", record);
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
+    if (princeRevote) room.orderPrinceRevotePending = false;
     if (record.exiledSeat || record.noExile) {
-      if (record.exiledSeat) {
-        const assignment = room.assignments.find((item) => item.seat === record.exiledSeat);
-        if (assignment) assignment.alive = false;
-      }
-      const exileRecord = {
-        day: room.night,
-        seat: record.exiledSeat,
-        noExile: record.noExile,
-        source: "DAY_VOTE",
-        createdAt: Date.now()
-      };
-      room.exileRecords.push(exileRecord);
-      writeLog(room, "EXILE_CONFIRMED", exileRecord);
+      finalizeDayVote(room, record, princeRevote ? "ORDER_PRINCE_REVOTE" : "DAY_VOTE");
     }
     writeLog(room, "DAY_VOTE_CONFIRMED", record);
     return sendJson(response, 200, {
@@ -603,6 +672,7 @@ async function handleApi(request, response, url) {
   if (target.action === "exile-record") {
     if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录放逐");
     if (room.phase !== "DAY") return sendError(response, 400, "当前阶段不能记录放逐");
+    if (room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成定序王子的投票流程");
     const seat = Number(body.seat || 0);
     const noExile = Boolean(body.noExile);
     if (!noExile && (seat < 1 || seat > 12)) return sendError(response, 400, "放逐座位不合法");
@@ -649,6 +719,7 @@ async function handleApi(request, response, url) {
   if (target.action === "night-start") {
     if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以开始夜晚");
     if (room.phase !== "DEALT" && room.phase !== "DAY") return sendError(response, 400, "当前阶段不能开始夜晚");
+    if (room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成定序王子的投票流程");
     room.night += 1;
     room.phase = "NIGHT";
     room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
@@ -664,7 +735,7 @@ async function handleApi(request, response, url) {
     if (room.phase !== "NIGHT") return sendError(response, 400, "当前不在夜晚阶段");
     const step = room.currentNightSteps[room.currentNightStepIndex];
     if (!step) return sendError(response, 400, "夜间流程已完成");
-    const targetSeats = Array.isArray(body.targetSeats) ? body.targetSeats.map(Number).filter(Boolean) : [];
+    const targetSeats = Array.isArray(body.targetSeats) ? [...new Set(body.targetSeats.map(Number).filter(Boolean))] : [];
     const skipped = Boolean(body.skipped);
     const cardRoleId = body.cardRoleId || "";
 
@@ -676,6 +747,7 @@ async function handleApi(request, response, url) {
       const requestedPoisonSeat = Number(body.poisonTargetSeat || 0);
       const poisonTargetSeat = step.poisonAvailable && requestedPoisonSeat >= 1 && requestedPoisonSeat <= 12 ? requestedPoisonSeat : 0;
       if (requestedPoisonSeat && !poisonTargetSeat) return sendError(response, 400, "毒药目标不合法或毒药已经使用");
+      if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) return sendError(response, 400, "诡术之境中，女巫同一晚不能同时使用解药和毒药");
       const actionRecord = {
         night: room.night,
         stepId: step.id,
@@ -716,11 +788,33 @@ async function handleApi(request, response, url) {
       createdAt: Date.now()
     };
     room.nightActions.push(actionRecord);
+    refreshSwapConflict(room, room.night);
     writeLog(room, "NIGHT_ACTION", actionRecord);
     room.currentNightStepIndex += 1;
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
+  }
+
+  if (target.action === "order-prince-activate" || target.action === "order-prince-decline") {
+    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以处理定序王子技能");
+    if (room.boardId !== "realm_of_trickery" || !room.pendingExileResult) return sendError(response, 400, "当前没有待处理的定序王子时机");
+    const pending = room.pendingExileResult;
+    if (target.action === "order-prince-activate") {
+      if (room.orderPrinceUsed) return sendError(response, 400, "定序王子已经发动过技能");
+      room.orderPrinceUsed = true;
+      room.orderPrinceRevotePending = true;
+      room.pendingExileResult = null;
+      room.dayVoteRecord = null;
+      writeLog(room, "ORDER_PRINCE_ACTIVATED", { day: room.night });
+    } else {
+      const record = pending.record || pending;
+      room.pendingExileResult = null;
+      room.dayVoteRecord = record;
+      if (record.exiledSeat || record.noExile) finalizeDayVote(room, record);
+      writeLog(room, "ORDER_PRINCE_DECLINED", { day: room.night });
+    }
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
 
   if (target.action === "night-undo") {
@@ -731,6 +825,7 @@ async function handleApi(request, response, url) {
       .find((item) => item.action.night === room.night);
     if (!index) return sendError(response, 400, "没有可撤回的夜间行动");
     const [removed] = room.nightActions.splice(index.actionIndex, 1);
+    refreshSwapConflict(room, room.night);
     room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
     writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
     return sendJson(response, 200, {

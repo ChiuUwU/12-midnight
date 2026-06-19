@@ -152,6 +152,10 @@ select {
   letter-spacing: 0;
 }
 
+.brand-en {
+  white-space: nowrap;
+}
+
 .brand-title {
   font-size: 38px;
   line-height: 1.05;

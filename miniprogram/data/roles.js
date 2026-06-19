@@ -100,6 +100,24 @@ const ROLES = {
     name: "守卫",
     camp: "GOOD",
     summary: "每晚守护一名玩家，不能连续两晚守同一人。"
+  },
+  magician: {
+    id: "magician",
+    name: "魔术师",
+    camp: "GOOD",
+    summary: "每晚可交换两个号码，换号影响当晚狼刀、毒药和预言家查验。"
+  },
+  order_prince: {
+    id: "order_prince",
+    name: "定序王子",
+    camp: "GOOD",
+    summary: "整局一次，在白天首轮投票结算前发动回溯，额外发言并重新投票。"
+  },
+  trickster: {
+    id: "trickster",
+    name: "诡术师",
+    camp: "WOLF",
+    summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。"
   }
 };
 

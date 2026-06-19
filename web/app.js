@@ -38,7 +38,10 @@
     masked_man: { id: "masked_man", name: "蒙面人", camp: "GOOD", image: "assets/roles/masked_man.png", summary: "夜间被毒、被摄、被刀时当晚不死，次日自己发言后死亡。" },
     mechanical_wolf: { id: "mechanical_wolf", name: "机械狼", camp: "WOLF", image: "assets/roles/mechanical_wolf.png", summary: "夜间模仿一名玩家，不与其他狼人见面，其他狼人出局后方可带刀。" },
     treasure_master: { id: "treasure_master", name: "盗宝大师", camp: "WOLF", image: "assets/roles/treasure_master.png", summary: "首夜获得三张盗宝牌；当前固定为狼人阵营。每晚切换一张牌使用技能。" },
-    guard: { id: "guard", name: "守卫", camp: "GOOD", image: "assets/roles/guard.png", summary: "每晚守护一名玩家，不能连续两晚守同一人。" }
+    guard: { id: "guard", name: "守卫", camp: "GOOD", image: "assets/roles/guard.png", summary: "每晚守护一名玩家，不能连续两晚守同一人。" },
+    magician: { id: "magician", name: "魔术师", camp: "GOOD", summary: "每晚可交换两个号码，换号影响当晚狼刀、毒药和预言家查验。" },
+    order_prince: { id: "order_prince", name: "定序王子", camp: "GOOD", summary: "整局一次，在白天首轮投票结算前发动回溯，额外发言并重新投票。" },
+    trickster: { id: "trickster", name: "诡术师", camp: "WOLF", summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。" }
   };
 
   const BOARDS = [
@@ -115,6 +118,22 @@
       ],
       summary: "",
       globalRules: DEFAULT_RULES
+    },
+    {
+      id: "realm_of_trickery",
+      name: "诡术之境",
+      playerCount: 12,
+      roles: [
+        { roleId: "seer", count: 1, camp: "GOOD" },
+        { roleId: "witch", count: 1, camp: "GOOD" },
+        { roleId: "magician", count: 1, camp: "GOOD" },
+        { roleId: "order_prince", count: 1, camp: "GOOD" },
+        { roleId: "villager", count: 4, camp: "GOOD" },
+        { roleId: "trickster", count: 1, camp: "WOLF" },
+        { roleId: "wolf", count: 3, camp: "WOLF" }
+      ],
+      summary: "",
+      globalRules: DEFAULT_RULES
     }
   ];
 
@@ -142,7 +161,10 @@
     masked_man: "蒙",
     mechanical_wolf: "械",
     treasure_master: "宝",
-    guard: "盾"
+    guard: "盾",
+    magician: "术",
+    order_prince: "序",
+    trickster: "诡"
   };
 
   function preloadRoleImages() {
@@ -185,8 +207,31 @@
       targetCount: 0,
       allowSkip: false,
       antidoteAvailable,
-      poisonAvailable
+      poisonAvailable,
+      singlePotionPerNight: room && room.boardId === "realm_of_trickery"
     };
+  }
+
+  function getUsedSwapSeats(room, stepId) {
+    return new Set(
+      (room && room.nightActions || [])
+        .filter((action) => action.stepId === stepId && !action.skipped)
+        .flatMap((action) => action.targetSeats || [])
+        .map(Number)
+    );
+  }
+
+  function getAvailableSwapSeats(room, stepId) {
+    const used = getUsedSwapSeats(room, stepId);
+    return (room && room.assignments || [])
+      .filter((assignment) => assignment.alive !== false && !used.has(assignment.seat))
+      .map((assignment) => assignment.seat)
+      .sort((left, right) => left - right);
+  }
+
+  function didSkipPreviousNight(room, stepId, night) {
+    const previous = (room && room.nightActions || []).find((action) => action.night === night - 1 && action.stepId === stepId);
+    return Boolean(previous && previous.skipped);
   }
 
   function getAvailableDanceSeats(room) {
@@ -251,6 +296,19 @@
         { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
         { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
       );
+    } else if (boardId === "realm_of_trickery") {
+      const tricksterSeats = getAvailableSwapSeats(room, "trickster_swap");
+      const magicianSeats = getAvailableSwapSeats(room, "magician_swap");
+      const witchStep = createWitchStep(room);
+      if (tricksterSeats.length >= 2) {
+        steps.push({ id: "trickster_swap", actor: "trickster", label: "诡术师交换两个号码", targetCount: 2, allowSkip: !didSkipPreviousNight(room, "trickster_swap", night), allowedSeats: tricksterSeats });
+      }
+      if (magicianSeats.length >= 2) {
+        steps.push({ id: "magician_swap", actor: "magician", label: "魔术师交换两个号码", targetCount: 2, allowSkip: true, allowedSeats: magicianSeats });
+      }
+      steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+      if (witchStep) steps.push(witchStep);
+      steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
     }
     return steps.map((step, index) => ({ ...step, index }));
   }
@@ -328,6 +386,9 @@
       sheriffVoteRecord: null,
       sheriffBadge: { holderSeat: 0, lost: false },
       dayVoteRecord: null,
+      pendingExileResult: null,
+      orderPrinceUsed: false,
+      orderPrinceRevotePending: false,
       deathRecords: [],
       exileRecords: []
     };
@@ -463,6 +524,66 @@
     };
   }
 
+  function sameSeatPair(left, right) {
+    if (!left || !right || left.length !== 2 || right.length !== 2) return false;
+    return [...left].map(Number).sort((a, b) => a - b).join(",") === [...right].map(Number).sort((a, b) => a - b).join(",");
+  }
+
+  function refreshSwapConflict(room, night) {
+    const actions = (room.nightActions || []).filter((action) => action.night === night && ["trickster_swap", "magician_swap"].includes(action.stepId));
+    actions.forEach((action) => { action.invalidByConflict = false; });
+    const trickster = actions.find((action) => action.stepId === "trickster_swap" && !action.skipped);
+    const magician = actions.find((action) => action.stepId === "magician_swap" && !action.skipped);
+    if (trickster && magician && sameSeatPair(trickster.targetSeats, magician.targetSeats)) {
+      trickster.invalidByConflict = true;
+      magician.invalidByConflict = true;
+    }
+  }
+
+  function getActiveSwapPair(room, stepId, night = room.night) {
+    const action = (room.nightActions || []).find((item) => item.night === night && item.stepId === stepId && !item.skipped && !item.invalidByConflict);
+    return action && action.targetSeats && action.targetSeats.length === 2 ? action.targetSeats.map(Number) : [];
+  }
+
+  function mapSeatWithPair(seat, pair) {
+    const value = Number(seat || 0);
+    if (!value || !pair || pair.length !== 2) return value;
+    if (value === Number(pair[0])) return Number(pair[1]);
+    if (value === Number(pair[1])) return Number(pair[0]);
+    return value;
+  }
+
+  function mapNightSeat(room, seat, night = room.night) {
+    return room.boardId === "realm_of_trickery" ? mapSeatWithPair(seat, getActiveSwapPair(room, "magician_swap", night)) : Number(seat || 0);
+  }
+
+  function mapExileSeat(room, seat, day = room.night) {
+    return room.boardId === "realm_of_trickery" ? mapSeatWithPair(seat, getActiveSwapPair(room, "trickster_swap", day)) : Number(seat || 0);
+  }
+
+  function finalizeDayVote(room, record, source = "DAY_VOTE") {
+    const rawExiledSeat = Number(record.exiledSeat || 0);
+    const actualExiledSeat = rawExiledSeat ? mapExileSeat(room, rawExiledSeat, record.day) : 0;
+    record.rawExiledSeat = rawExiledSeat;
+    record.actualExiledSeat = actualExiledSeat;
+    record.exiledSeat = actualExiledSeat;
+    if (actualExiledSeat) {
+      const assignment = room.assignments.find((item) => item.seat === actualExiledSeat);
+      if (assignment) assignment.alive = false;
+    }
+    const exileRecord = {
+      day: room.night,
+      seat: actualExiledSeat,
+      rawSeat: rawExiledSeat,
+      noExile: record.noExile,
+      source,
+      createdAt: Date.now()
+    };
+    room.exileRecords = room.exileRecords || [];
+    room.exileRecords.push(exileRecord);
+    writeLog(room, "EXILE_CONFIRMED", exileRecord);
+  }
+
   function calculateSuggestedDeaths(room, night = room.night) {
     const actions = (room.nightActions || []).filter((item) => item.night === night);
     const previousActions = (room.nightActions || []).filter((item) => item.night === night - 1);
@@ -482,10 +603,13 @@
       deaths.set(seat, reasons);
     };
 
-    const wolfKill = firstTarget("wolves_kill");
+    const rawWolfKill = firstTarget("wolves_kill");
+    const wolfKill = mapNightSeat(room, rawWolfKill, night);
     const witchAction = actions.find((item) => item.stepId === "witch_action");
-    const antidote = witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote");
-    const witchPoison = witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison");
+    const rawAntidote = witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote");
+    const antidote = mapNightSeat(room, rawAntidote, night);
+    const rawWitchPoison = witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison");
+    const witchPoison = mapNightSeat(room, rawWitchPoison, night);
     const poisonerPoison = firstTarget("poisoner_poison");
     const guard = firstTarget("guard_guard");
     const dream = firstTarget("dreamer_dream");
@@ -553,7 +677,10 @@
     if (action.stepId === "witch_antidote") return action.skipped ? "女巫选择不救" : `女巫救 ${formatSeatList(action.targetSeats || [])}`;
     if (action.skipped) return `${action.label || "夜间行动"}：空过`;
     if (action.cardRoleId) return `${action.label || "夜间行动"}：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}`;
-    if (action.targetSeats && action.targetSeats.length) return `${action.label || "夜间行动"}：${formatSeatList(action.targetSeats)}`;
+    if (action.targetSeats && action.targetSeats.length) {
+      const conflict = action.invalidByConflict ? "（与另一换号完全相同，本夜双方均无效，号码仍计为已使用）" : "";
+      return `${action.label || "夜间行动"}：${formatSeatList(action.targetSeats)}${conflict}`;
+    }
     return action.label || "夜间行动";
   }
 
@@ -611,7 +738,10 @@
       SHERIFF_VOTE_CONFIRMED: ["警徽投票", payload.electedSeat ? `${payload.electedSeat}号当选警长` : payload.badgeLost ? "警徽流失" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生警长"],
       DAYBREAK_DEATHS_CONFIRMED: ["天亮死亡", payload.seats && payload.seats.length ? seats(payload.seats) : "平安夜"],
       DAY_VOTE_CONFIRMED: ["放逐投票", payload.exiledSeat ? `${payload.exiledSeat}号出局` : payload.noExile ? "无人出局" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生结果"],
-      EXILE_CONFIRMED: ["白天放逐", payload.noExile ? "无人出局" : `${payload.seat || ""}号出局`],
+      DAY_VOTE_PENDING: ["等待发动技能", payload.exiledSeat ? `${payload.exiledSeat}号为原始出局结果，尚未宣布实际死讯` : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票，尚未进入 PK` : "等待定序王子"],
+      ORDER_PRINCE_ACTIVATED: ["定序王子发动", "首轮投票作废，所有存活玩家重新自由投票"],
+      ORDER_PRINCE_DECLINED: ["定序王子未发动", "继续结算原始票型"],
+      EXILE_CONFIRMED: ["白天放逐", payload.noExile ? "无人出局" : payload.rawSeat && payload.rawSeat !== payload.seat ? `原始${payload.rawSeat}号，换号后${payload.seat}号实际出局` : `${payload.seat || ""}号出局`],
       SHERIFF_BADGE_TRANSFERRED: ["警徽移交", `警徽移交给 ${payload.seat || ""}号`],
       SHERIFF_BADGE_DESTROYED: ["撕毁警徽", "警徽已撕毁"],
       GAME_ENDED: ["结束游戏", "游戏已结束"]
@@ -701,6 +831,12 @@
       return { title: "公布死亡", detail: room.night === 1 ? "警长竞选已结束，现在公布第一夜死亡。" : "请确认昨夜死亡玩家。", action: "记录天亮死亡" };
     }
     if (room.phase === "DAY") {
+      if (room.pendingExileResult) {
+        return { title: "等待发动技能", detail: "首轮投票结果已产生，宣布实际死讯前等待定序王子发动回溯。", action: "处理投票结果" };
+      }
+      if (room.orderPrinceRevotePending) {
+        return { title: "回溯重新投票", detail: "所有存活玩家重新自由投票。", action: "记录重新投票" };
+      }
       const vote = room.dayVoteRecord;
       if (vote && vote.day === room.night && vote.pkSeats && vote.pkSeats.length && !vote.exiledSeat && !vote.noExile) {
         return { title: "放逐 PK 投票", detail: `PK 玩家：${formatSeatList(vote.pkSeats)}。`, action: "记录放逐投票" };
@@ -730,21 +866,24 @@
       poisoner_poison: "毒师请睁眼，是否使用毒药？选择目标或空过后闭眼。",
       spirit_medium_check: "通灵师请睁眼，请查验一名存活玩家。法官线下告知具体身份牌后，通灵师闭眼。",
       mechanical_mimic: "机械狼请睁眼，请选择今晚模仿的目标。记录后闭眼。",
-      guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。"
+      guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。",
+      trickster_swap: "诡术师请睁眼，请交换两个号码；也可以空换，但不能连续两晚空换。选择后闭眼并与狼人见面。",
+      magician_swap: "魔术师请睁眼，请交换两个号码；也可以空换。选择后闭眼。"
     };
     return scripts[step.id] || `${step.label}。记录完成后进入下一步。`;
   }
 
   function getNightResultText(room, step, targetSeats) {
     if (!step || !["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id)) return "";
-    const seat = targetSeats && targetSeats.length ? Number(targetSeats[0]) : 0;
-    if (!seat) return "选择目标后，这里会显示需要告知角色的结果。";
+    const selectedSeat = targetSeats && targetSeats.length ? Number(targetSeats[0]) : 0;
+    if (!selectedSeat) return "选择目标后，这里会显示需要告知角色的结果。";
+    const seat = step.id === "seer_check" ? mapNightSeat(room, selectedSeat, room.night) : selectedSeat;
     const assignment = (room.assignments || []).find((item) => item.seat === seat);
     if (!assignment) return `${seat}号：未找到身份`;
     const role = getRole(assignment.roleId) || { name: assignment.roleId };
     if (step.id === "seer_check") {
       const result = assignment.camp === "WOLF" ? "狼人" : "好人";
-      return `${seat}号查验结果：${result}`;
+      return selectedSeat === seat ? `${seat}号查验结果：${result}` : `选择${selectedSeat}号，实际查验${seat}号：${result}`;
     }
     if (step.id === "spirit_medium_check") {
       return `${seat}号具体身份：${role.name}`;
@@ -993,7 +1132,7 @@
           </div>
         </div>
         <div class="hero-copy">
-          <div class="eyebrow brand-name">最后一夜 Last-Night</div>
+          <div class="eyebrow brand-name">最后一夜 <span class="brand-en">Last-Night</span></div>
           <div class="brand-subtitle">狼人杀还有一万个夏天</div>
         </div>
       </section>
@@ -1023,7 +1162,7 @@
         <div class="section-heading">
           <div>
             <div class="label">固定版型</div>
-            <div class="value">四套 12 人局</div>
+            <div class="value">${BOARDS.length}套 12 人局</div>
           </div>
           <span class="tag">MVP</span>
         </div>
@@ -1187,6 +1326,7 @@
     const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
     const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && sheriffElectionDone && !daybreakRecorded;
     const canRunDayActions = room.phase === "DAY" && isJudge && daybreakRecorded;
+    const pendingExileResult = room.pendingExileResult || null;
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
     const judgeNextStep = getJudgeNextStep(room);
@@ -1200,9 +1340,10 @@
       !gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : "",
       canRecordDaybreakDeaths ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
       canRecordDaybreakDeaths && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
-      canRunDayActions ? '<button class="button" data-action="view" data-view="dayVote">记录放逐投票</button>' : "",
-      canRunDayActions ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : "",
-      canRunDayActions ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
+      canRunDayActions && pendingExileResult ? '<button class="button primary" data-action="view" data-view="orderPrince">处理投票结果</button>' : "",
+      canRunDayActions && !pendingExileResult ? `<button class="button" data-action="view" data-view="dayVote">${room.orderPrinceRevotePending ? "记录回溯重投" : "记录放逐投票"}</button>` : "",
+      canRunDayActions && !pendingExileResult ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : "",
+      canRunDayActions && !pendingExileResult && !room.orderPrinceRevotePending ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.phase === "NIGHT" && isJudge ? '<button class="button primary" data-action="view" data-view="night">继续夜间流程</button>' : "",
       room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
@@ -1425,6 +1566,7 @@
             }).join("")}
           </section>
           ${step.id === "dancer_dance" ? `<div class="notice">每名玩家只能进入一次舞池；当前可选：${formatSeatList(step.allowedSeats || [])}</div>` : ""}
+          ${["trickster_swap", "magician_swap"].includes(step.id) ? `<div class="notice">每个号码整局只能被该角色交换一次；当前可选：${formatSeatList(step.allowedSeats || [])}</div>` : ""}
         </section>
         ${getNightResultHtml(room, step, [])}
       `}
@@ -1594,13 +1736,14 @@
     const isJudge = !IS_REMOTE || room.isJudge;
     if (!isJudge) return setView("room");
     const previous = room.dayVoteRecord;
-    const secondRound = previous && previous.day === room.night && previous.pkSeats && previous.pkSeats.length > 1 && !previous.exiledSeat && !previous.noExile;
+    const princeRevote = Boolean(room.orderPrinceRevotePending);
+    const secondRound = !princeRevote && previous && previous.day === room.night && previous.pkSeats && previous.pkSeats.length > 1 && !previous.exiledSeat && !previous.noExile;
     const aliveSeats = getAliveSeats(room);
     const targets = secondRound ? previous.pkSeats : aliveSeats;
     const voters = secondRound ? aliveSeats.filter((seat) => !targets.includes(seat)) : aliveSeats;
 
     app.innerHTML = `
-      ${pageHeader(secondRound ? "放逐 PK 投票" : "放逐投票", secondRound ? `PK 玩家：${formatSeatList(targets)}。除 PK 玩家外投第二轮。` : "记录白天投票，平票进入 PK，二轮再平票无人出局。")}
+      ${pageHeader(princeRevote ? "回溯重新投票" : secondRound ? "放逐 PK 投票" : "放逐投票", princeRevote ? "定序王子已发动，所有存活玩家重新自由投票。" : secondRound ? `PK 玩家：${formatSeatList(targets)}。除 PK 玩家外投第二轮。` : "记录白天投票，平票进入 PK，二轮再平票无人出局。")}
       <section class="panel">
         <div class="label">可投目标</div>
         <div class="body-text">${formatSeatList(targets)}</div>
@@ -1619,7 +1762,35 @@
           `).join("")}
         </div>
       </section>
-      <button class="button primary" data-action="day-vote-submit" data-round="${secondRound ? 2 : 1}">确认放逐投票</button>
+      <button class="button primary" data-action="day-vote-submit" data-round="${secondRound ? 2 : 1}" data-prince-revote="${princeRevote}">确认放逐投票</button>
+      <button class="button" data-action="view" data-view="room">返回房间</button>
+    `;
+  }
+
+  function renderOrderPrince() {
+    const room = getCurrentRoom();
+    if (!room || !room.pendingExileResult) return setView("room");
+    const pending = room.pendingExileResult;
+    const record = pending.record || pending;
+    const rawSeat = Number(record.exiledSeat || 0);
+    const voteCount = rawSeat && record.counts ? Number(record.counts[rawSeat] || 0) : 0;
+    const tied = !rawSeat && record.topSeats && record.topSeats.length > 1;
+    const resultText = tied
+      ? `${formatSeatList(record.topSeats)}平票，等待玩家发动技能`
+      : rawSeat
+        ? `${rawSeat}号玩家${voteCount}票出局，等待玩家发动技能`
+        : "本轮无人得票，等待玩家发动技能";
+    app.innerHTML = `
+      ${pageHeader("等待发动技能", "实际死讯尚未宣布")}
+      <section class="panel script-panel">
+        <div class="label">法官台词</div>
+        <div class="value">${resultText}</div>
+      </section>
+      <section class="panel">
+        <div class="body-text">定序王子可在此时发动“回溯”。若无人发动，单一出局结果再按诡术师换号结算；平票则进入正常 PK。</div>
+      </section>
+      ${room.orderPrinceUsed ? "" : '<button class="button primary" data-action="order-prince-activate">定序王子发动回溯</button>'}
+      <button class="button" data-action="order-prince-decline">无人发动，继续结算</button>
       <button class="button" data-action="view" data-view="room">返回房间</button>
     `;
   }
@@ -1752,6 +1923,7 @@
     if (state.view === "sheriffVote") return renderSheriffVote();
     if (state.view === "death") return renderDeathRecord();
     if (state.view === "dayVote") return renderDayVote();
+    if (state.view === "orderPrince") return renderOrderPrince();
     if (state.view === "exile") return renderExileRecord();
     if (state.view === "badge") return renderBadge();
     if (state.view === "judge") return renderJudge();
@@ -1947,6 +2119,10 @@
         window.alert("请先选择毒药号码");
         return;
       }
+      if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) {
+        window.alert("诡术之境中，女巫同一晚不能同时使用解药和毒药");
+        return;
+      }
 
       try {
         if (IS_REMOTE) {
@@ -1990,6 +2166,7 @@
           .find((item) => item.nightAction.night === room.night);
         if (!index) return;
         const [removed] = room.nightActions.splice(index.actionIndex, 1);
+        refreshSwapConflict(room, room.night);
         room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
         writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
         saveState();
@@ -2051,6 +2228,7 @@
         };
         room.nightActions = room.nightActions || [];
         room.nightActions.push(actionRecord);
+        refreshSwapConflict(room, room.night);
         writeLog(room, "NIGHT_ACTION", actionRecord);
         room.currentNightStepIndex = (room.currentNightStepIndex || 0) + 1;
         saveState();
@@ -2251,6 +2429,7 @@
 
     if (action === "day-vote-submit" && room) {
       const round = Number(target.dataset.round || 1);
+      const princeRevote = target.dataset.princeRevote === "true";
       const previous = room.dayVoteRecord;
       const votes = Array.from(app.querySelectorAll(".day-vote-select")).map((select) => ({
         voterSeat: Number(select.dataset.voter),
@@ -2259,8 +2438,8 @@
       const pkSeats = previous && previous.day === room.night && previous.pkSeats ? previous.pkSeats : [];
       try {
         if (IS_REMOTE) {
-          await remotePost("day-vote", { round, votes, pkSeats });
-          state.view = "room";
+          await remotePost("day-vote", { round, votes, pkSeats, orderPrinceRevote: princeRevote });
+          state.view = state.remoteRoom.pendingExileResult ? "orderPrince" : "room";
           saveState();
           render();
           return;
@@ -2268,24 +2447,54 @@
 
         const record = calculateDayVote({ room, round, votes, pkSeats });
         room.dayVoteRecord = record;
+        if (room.boardId === "realm_of_trickery" && round === 1 && !room.orderPrinceUsed && !princeRevote) {
+          room.pendingExileResult = { day: room.night, record, createdAt: Date.now() };
+          writeLog(room, "DAY_VOTE_PENDING", record);
+          state.view = "orderPrince";
+          saveState();
+          render();
+          return;
+        }
+        if (princeRevote) room.orderPrinceRevotePending = false;
         if (record.exiledSeat || record.noExile) {
-          if (record.exiledSeat) {
-            const assignment = room.assignments.find((item) => item.seat === record.exiledSeat);
-            if (assignment) assignment.alive = false;
-          }
-          const exileRecord = {
-            day: room.night,
-            seat: record.exiledSeat,
-            noExile: record.noExile,
-            source: "DAY_VOTE",
-            createdAt: Date.now()
-          };
-          room.exileRecords = room.exileRecords || [];
-          room.exileRecords.push(exileRecord);
-          writeLog(room, "EXILE_CONFIRMED", exileRecord);
+          finalizeDayVote(room, record, princeRevote ? "ORDER_PRINCE_REVOTE" : "DAY_VOTE");
         }
         writeLog(room, "DAY_VOTE_CONFIRMED", record);
         state.view = "room";
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if ((action === "order-prince-activate" || action === "order-prince-decline") && room) {
+      try {
+        if (IS_REMOTE) {
+          await remotePost(action === "order-prince-activate" ? "order-prince-activate" : "order-prince-decline");
+          state.view = action === "order-prince-activate" ? "dayVote" : "room";
+          saveState();
+          render();
+          return;
+        }
+        const pending = room.pendingExileResult;
+        if (!pending) return;
+        if (action === "order-prince-activate") {
+          room.orderPrinceUsed = true;
+          room.orderPrinceRevotePending = true;
+          room.pendingExileResult = null;
+          room.dayVoteRecord = null;
+          writeLog(room, "ORDER_PRINCE_ACTIVATED", { day: room.night });
+          state.view = "dayVote";
+        } else {
+          const record = pending.record || pending;
+          room.pendingExileResult = null;
+          room.dayVoteRecord = record;
+          if (record.exiledSeat || record.noExile) finalizeDayVote(room, record);
+          writeLog(room, "ORDER_PRINCE_DECLINED", { day: room.night });
+          state.view = "room";
+        }
         saveState();
         render();
       } catch (error) {

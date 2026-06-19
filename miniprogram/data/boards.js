@@ -87,6 +87,22 @@ const BOARDS = [
     ],
     summary: "",
     globalRules: DEFAULT_RULES
+  },
+  {
+    id: "realm_of_trickery",
+    name: "诡术之境",
+    playerCount: 12,
+    roles: [
+      { roleId: "seer", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "magician", count: 1, camp: "GOOD" },
+      { roleId: "order_prince", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 4, camp: "GOOD" },
+      { roleId: "trickster", count: 1, camp: "WOLF" },
+      { roleId: "wolf", count: 3, camp: "WOLF" }
+    ],
+    summary: "",
+    globalRules: DEFAULT_RULES
   }
 ];
 
