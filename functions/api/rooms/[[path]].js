@@ -1,6 +1,6 @@
-import "../../../web/balanced-deal.js";
+import balancedDeal from "../../../web/balanced-deal.js";
 
-const { createBalancedDeal } = globalThis.BalancedDeal;
+const { createBalancedDeal } = balancedDeal;
 
 const DEFAULT_RULES = {
   winCondition: "KILL_SIDE",
