@@ -1310,6 +1310,8 @@
     const currentNightActions = (room.nightActions || []).filter((action) => action.night === room.night);
     const suggestedDeaths = calculateSuggestedDeaths(room, room.night);
     const witchAntidoteTarget = step && step.id === "witch_antidote" ? getWitchAntidoteTarget(room) : 0;
+    const nightSubmitLabel = step && step.id === "witch_antidote" ? "救" : step && step.id === "witch_poison" ? "使用毒药" : "确认记录";
+    const nightSkipLabel = step && step.id === "witch_antidote" ? "不救" : step && step.id === "witch_poison" ? "不使用毒药" : "空过";
 
     if (!step) {
       app.innerHTML = `
@@ -1378,8 +1380,8 @@
       <section class="panel action-panel">
         <div class="label">本步操作</div>
         <div class="action-row">
-          <button class="button primary" data-action="night-submit">${step.id === "witch_antidote" ? "救" : "确认记录"}</button>
-          ${step.allowSkip ? `<button class="button" data-action="night-skip">${step.id === "witch_antidote" ? "不救" : "空过"}</button>` : ""}
+          <button class="button primary" data-action="night-submit">${nightSubmitLabel}</button>
+          ${step.allowSkip ? `<button class="button" data-action="night-skip">${nightSkipLabel}</button>` : ""}
           ${currentNightActions.length ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
           <button class="button" data-action="view" data-view="room">返回房间</button>
         </div>
