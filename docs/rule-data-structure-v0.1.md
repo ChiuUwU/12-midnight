@@ -35,7 +35,10 @@ type RoleId =
   | "masked_man"
   | "mechanical_wolf"
   | "treasure_master"
-  | "guard";
+  | "guard"
+  | "magician"
+  | "order_prince"
+  | "trickster";
 
 type DeathCause =
   | "WOLF_KILL"
@@ -111,6 +114,8 @@ interface PlayerMark {
     | "INJURED"
     | "DANCE_POOL"
     | "MASK_FOR_DANCE"
+    | "MAGICIAN_SWAP"
+    | "TRICKSTER_SWAP"
     | "DELAYED_DEATH";
   night: number;
   sourceSeat?: number;
@@ -136,6 +141,9 @@ interface AbilityState {
   activeTreasureCard?: RoleId;
   lastTreasureCard?: RoleId;
   mixedBloodModelSeat?: number;
+  usedSwapSeats?: number[];
+  lastSwapWasEmpty?: boolean;
+  orderPrinceUsed?: boolean;
 }
 ```
 
@@ -267,6 +275,60 @@ const boardMechanicalWolfSpiritMedium: BoardConfig = {
   ],
 };
 ```
+
+### 7.5 诡术之境
+
+```ts
+const boardRealmOfTrickery: BoardConfig = {
+  id: "realm_of_trickery",
+  name: "诡术之境",
+  playerCount: 12,
+  roles: [
+    { roleId: "seer", count: 1, camp: "GOOD" },
+    { roleId: "witch", count: 1, camp: "GOOD" },
+    { roleId: "magician", count: 1, camp: "GOOD" },
+    { roleId: "order_prince", count: 1, camp: "GOOD" },
+    { roleId: "villager", count: 4, camp: "GOOD" },
+    { roleId: "trickster", count: 1, camp: "WOLF" },
+    { roleId: "wolf", count: 3, camp: "WOLF" },
+  ],
+};
+```
+
+推荐为换号与回溯增加独立状态：
+
+```ts
+interface SeatSwapRecord {
+  night: number;
+  source: "MAGICIAN" | "TRICKSTER";
+  seats: [number, number] | [];
+  skipped: boolean;
+  invalidByConflict: boolean;
+}
+
+interface PendingExileResult {
+  day: number;
+  round: number;
+  votes: Array<{ voterSeat: number; targetSeat: number }>;
+  counts: Record<number, number>;
+  rawTopSeats: number[];
+  rawExiledSeat: number;
+  rawVoteCount: number;
+  waitingForOrderPrince: boolean;
+  orderPrinceActivated: boolean;
+  actualExiledSeat: number;
+}
+```
+
+换号结算要求：
+
+1. 魔术师与诡术师提交号码后立即写入各自 `usedSwapSeats`；即使同对冲突无效，也消耗号码。
+2. 同对冲突判断应先将号码对排序，因此 `[2, 5]` 与 `[5, 2]` 相同。
+3. 魔术师映射用于当夜狼刀、毒药、查验的实际目标。
+4. 女巫看到并记录狼人原始刀口，解药生效时解救映射后的实际承伤玩家。
+5. 诡术师映射只用于当日最终放逐结果，不修改票数和原始票型。
+6. 定序王子决定是否回溯前，禁止把 `rawExiledSeat` 写入死亡或放逐记录。
+7. 回溯后清空第一次投票的待结算结果，由所有存活玩家重新自由投票；最终结果再应用诡术师映射。
 
 ## 8. 发牌逻辑建议
 
