@@ -70,9 +70,9 @@
     mechanical_wolf: { id: "mechanical_wolf", name: "机械狼", camp: "WOLF", image: "assets/roles/mechanical_wolf.png", summary: "夜间模仿一名玩家，不与其他狼人见面，其他狼人出局后方可带刀。" },
     treasure_master: { id: "treasure_master", name: "盗宝大师", camp: "WOLF", image: "assets/roles/treasure_master.png", summary: "首夜获得三张盗宝牌；当前固定为狼人阵营。每晚切换一张牌使用技能。" },
     guard: { id: "guard", name: "守卫", camp: "GOOD", image: "assets/roles/guard.png", summary: "每晚守护一名玩家，不能连续两晚守同一人。" },
-    magician: { id: "magician", name: "魔术师", camp: "GOOD", summary: "每晚可交换两个号码，换号影响当晚狼刀、毒药和预言家查验。" },
-    order_prince: { id: "order_prince", name: "定序王子", camp: "GOOD", summary: "整局一次，在白天首轮投票结算前发动回溯，额外发言并重新投票。" },
-    trickster: { id: "trickster", name: "诡术师", camp: "WOLF", summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。" }
+    magician: { id: "magician", name: "魔术师", camp: "GOOD", image: "assets/roles/magician.png", summary: "每晚可交换两个号码，换号影响当晚狼刀、毒药和预言家查验。" },
+    order_prince: { id: "order_prince", name: "定序王子", camp: "GOOD", image: "assets/roles/order_prince.png", summary: "整局一次，在白天首轮投票结算前发动回溯，额外发言并重新投票。" },
+    trickster: { id: "trickster", name: "诡术师", camp: "WOLF", image: "assets/roles/trickster.png", summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。" }
   };
 
   const BOARDS = [
