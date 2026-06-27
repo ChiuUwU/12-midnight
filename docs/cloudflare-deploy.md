@@ -33,6 +33,8 @@ npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
 
 7. 重新部署 Pages。
 
+以后 `db/schema.sql` 增加表或索引时，应在发布新代码前重新执行第 5 步。当前 Function 会在首次记录对局结果时自动补建 `game_results` 表，但预先执行完整 schema 仍是推荐流程。
+
 ## 部署后怎么用
 
 打开 Cloudflare Pages 给你的网址，例如：

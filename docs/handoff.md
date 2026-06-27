@@ -1,8 +1,25 @@
 # 十二点天黑 — 当前开发状态
 
-> 基准提交：`0be5191`  
-> 当前分支：`claude/dawn-voyage-p0-fixes`  
-> 实现负责人：Claude  
+> 基准提交：`84648aa`（Claude 曙光航纪提交）
+> 当前分支：`codex/dawn-voyage-review-fixes`
+> 实现负责人：Codex（审查修复）
+
+## Codex 审查修复（2026-06-28）
+
+- 修复本地联机和 Cloudflare 撤回选风/登船后派生状态未恢复。
+- 曙光航纪女巫同夜只能使用一瓶药，与版型文档一致。
+- 天亮显示当夜风向，并且只在允许宣布时向玩家公开。
+- 修复 Cloudflare 海妖选风响应的身份过滤参数。
+- `game_results` 在首次写入时自动建表，写入失败不再静默伪装成功。
+- 同步六个版型的首夜身份确认步骤到本地联机与 Cloudflare 后端。
+- 更新前端资源缓存版本和 Cloudflare 数据库迁移说明。
+- 新增 `tests/dawn-voyage.test.js`，覆盖撤回、双药限制、风向公开、登船撤回和远程首夜确认步骤。
+
+验证结果：`npm.cmd test` 7/7 通过；前端、本地服务端、Pages Function、均衡发牌及新增测试均通过 `node --check`。
+
+当前状态：等待用户批准提交、推送、合并和部署。
+
+## Claude 提交快照
 
 ## 本轮目标
 

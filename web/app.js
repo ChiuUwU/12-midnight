@@ -265,7 +265,7 @@
       allowSkip: false,
       antidoteAvailable,
       poisonAvailable,
-      singlePotionPerNight: room && room.boardId === "realm_of_trickery"
+      singlePotionPerNight: room && ["realm_of_trickery", "dawn_voyage"].includes(room.boardId)
     };
   }
 
@@ -1560,11 +1560,12 @@
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
         <div class="notice">${isJudge ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
-        ${room.boardId === "dawn_voyage" && room.phase === "DAY" && room.lastWindDirection ? (() => {
+        ${room.boardId === "dawn_voyage" && room.phase === "DAY" && (isJudge ? room.captainAliveAtDawn && room.windDirection : room.announcedWindDirection) ? (() => {
           const windName = { calm: "无风", tailwind: "顺风", headwind: "逆风" };
+          const announcedWind = isJudge ? room.windDirection : room.announcedWindDirection;
           const captainAlive = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
           const captainDiedThisNight = room.captainAliveAtDawn && !captainAlive;
-          const label = captainAlive ? "昨夜" + windName[room.lastWindDirection] : captainDiedThisNight ? "昨夜" + windName[room.lastWindDirection] + "（法官宣布）" : "";
+          const label = "昨夜" + windName[announcedWind] + (isJudge && captainDiedThisNight ? "（法官宣布）" : "");
           return label ? '<div class="notice" style="color:var(--accent);font-weight:600;">' + label + '</div>' : "";
         })() : ""}
         <div class="notice">${isJudge ? `下一步：${judgeNextStep.title}。${judgeNextStep.detail}` : getPlayerPhaseText(room, mySeat)}</div>
@@ -2342,7 +2343,7 @@
         return;
       }
       if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) {
-        window.alert("诡术之境中，女巫同一晚不能同时使用解药和毒药");
+        window.alert("本版型中，女巫同一晚不能同时使用解药和毒药");
         return;
       }
 
@@ -2389,18 +2390,12 @@
         if (!index) return;
         const [removed] = room.nightActions.splice(index.actionIndex, 1);
         if (removed.stepId === "siren_wind") {
-          const prevWind = [...(room.nightActions || [])].reverse().find((a) => a.stepId === "siren_wind" && a.night === room.night);
-          if (prevWind && prevWind.windDirection) {
-            room.windDirection = prevWind.windDirection;
-            room.lastWindDirection = prevWind.lastWindDirection || (room.night > 1 ? null : "calm");
-          } else {
-            room.windDirection = room.lastWindDirection || "calm";
-            room.lastWindDirection = room.night > 1 ? (room.nightActions || []).reverse().find((a) => a.stepId === "siren_wind" && a.night < room.night)?.windDirection || "calm" : "calm";
-          }
+          const previousWind = [...(room.nightActions || [])].reverse().find((a) => a.stepId === "siren_wind" && a.night < room.night)?.windDirection || "calm";
+          room.windDirection = previousWind;
+          room.lastWindDirection = previousWind;
         }
         if (removed.stepId === "captain_board") {
-          const prevBoard = [...(room.nightActions || [])].reverse().find((a) => a.stepId === "captain_board" && a.night === room.night);
-          room.boardedSeat = prevBoard && prevBoard.targetSeats && prevBoard.targetSeats.length ? prevBoard.targetSeats[0] : 0;
+          room.boardedSeat = 0;
         }
         refreshSwapConflict(room, room.night);
         writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });

@@ -306,7 +306,7 @@ function createWitchStep(room) {
   const antidoteAvailable = !hasUsedWitchAntidote(room);
   const poisonAvailable = !hasUsedWitchPoison(room);
   if (!antidoteAvailable && !poisonAvailable) return null;
-  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable, singlePotionPerNight: room && room.boardId === "realm_of_trickery" };
+  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable, singlePotionPerNight: room && ["realm_of_trickery", "dawn_voyage"].includes(room.boardId) };
 }
 
 function getAvailableSwapSeats(room, stepId) {
@@ -373,6 +373,10 @@ function createNightSteps(boardId, night, room = null) {
     steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) steps.push(witchStep);
     steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    if (firstNight) {
+      steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
+      steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
+    }
   } else if (boardId === "masquerade") {
     const witchStep = createWitchStep(room);
     steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
@@ -388,6 +392,10 @@ function createNightSteps(boardId, night, room = null) {
         { id: "mask_give", actor: "mask", label: "假面给予面具", targetCount: 1, allowSkip: false }
       );
     }
+    if (firstNight) {
+      steps.push({ id: "dancer_confirm", actor: "dancer", label: "舞者确认身份", targetCount: 0, allowSkip: false });
+      steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
+    }
   } else if (boardId === "treasure_master") {
     steps.push(
       { id: "treasure_pick", actor: "treasure_master", label: "盗宝大师选择今晚使用的盗宝牌", targetCount: 0, allowSkip: false, needsCard: true },
@@ -398,6 +406,10 @@ function createNightSteps(boardId, night, room = null) {
       { id: "poisoner_poison", actor: "poisoner", label: "毒师选择是否毒人", targetCount: 1, allowSkip: true },
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
+    if (firstNight) {
+      steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
+      steps.push({ id: "masked_man_confirm", actor: "masked_man", label: "蒙面人确认身份", targetCount: 0, allowSkip: false });
+    }
   } else if (boardId === "mechanical_wolf_spirit_medium") {
     const witchStep = createWitchStep(room);
     steps.push(
@@ -409,6 +421,7 @@ function createNightSteps(boardId, night, room = null) {
       { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
       { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
     );
+    if (firstNight) steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
   } else if (boardId === "realm_of_trickery") {
     const tricksterSeats = getAvailableSwapSeats(room, "trickster_swap");
     const magicianSeats = getAvailableSwapSeats(room, "magician_swap");
@@ -418,6 +431,7 @@ function createNightSteps(boardId, night, room = null) {
     steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) steps.push(witchStep);
     steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    if (firstNight) steps.push({ id: "order_prince_confirm", actor: "order_prince", label: "定序王子确认身份", targetCount: 0, allowSkip: false });
   } else if (boardId === "dawn_voyage") {
     const witchStep = createWitchStep(room);
     const sirenAlive = (room && room.assignments || []).some((a) => a.roleId === "siren" && a.alive !== false);
@@ -438,6 +452,10 @@ function createNightSteps(boardId, night, room = null) {
     steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) steps.push(witchStep);
     steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    if (firstNight) {
+      steps.push({ id: "captain_confirm", actor: "captain", label: "船长确认身份", targetCount: 0, allowSkip: false });
+      steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
+    }
   }
   return steps.map((step, index) => ({ ...step, index }));
 }
@@ -480,6 +498,14 @@ async function ensureDealHistoryTable(env) {
   await env.DB.prepare(
     "CREATE TABLE IF NOT EXISTS deal_histories (profile_id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)"
   ).run();
+}
+
+async function ensureGameResultsTable(env) {
+  await env.DB.prepare(
+    "CREATE TABLE IF NOT EXISTS game_results (id TEXT PRIMARY KEY, board_id TEXT NOT NULL, room_id TEXT NOT NULL, result TEXT NOT NULL, data TEXT NOT NULL, created_at INTEGER NOT NULL)"
+  ).run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_game_results_room_id ON game_results(room_id)").run();
+  await env.DB.prepare("CREATE INDEX IF NOT EXISTS idx_game_results_created_at ON game_results(created_at)").run();
 }
 
 async function loadDealHistory(env, profileId) {
@@ -551,6 +577,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     exileRecords: room.exileRecords || [],
     windDirection: judge ? room.windDirection || "calm" : "",
     lastWindDirection: judge ? room.lastWindDirection || "calm" : "",
+    announcedWindDirection: room.phase === "DAY" && room.captainAliveAtDawn ? room.windDirection || "calm" : "",
     boardedSeat: judge ? room.boardedSeat || 0 : 0,
     captainDiedLastDay: judge ? Boolean(room.captainDiedLastDay) : false,
     captainAliveAtDawn: judge ? Boolean(room.captainAliveAtDawn) : false
@@ -814,7 +841,7 @@ async function handleRoomAction(request, env, route) {
       writeLog(room, "NIGHT_ACTION", { stepId: step.id, windDirection: wind });
       room.currentNightStepIndex += 1;
       await saveRoom(env, room);
-      return json({ room: await sanitizeRoom(room, clientId, env, judgeToken) });
+      return json({ room: sanitizeRoom(room, { clientId, judgeToken }) });
     }
     if (step.id === "witch_action") {
       const antidoteUsed = Boolean(body.antidoteUsed) && step.antidoteAvailable;
@@ -824,7 +851,7 @@ async function handleRoomAction(request, env, route) {
       const requestedPoisonSeat = Number(body.poisonTargetSeat || 0);
       const poisonTargetSeat = step.poisonAvailable && requestedPoisonSeat >= 1 && requestedPoisonSeat <= 12 ? requestedPoisonSeat : 0;
       if (requestedPoisonSeat && !poisonTargetSeat) return error(400, "毒药目标不合法或毒药已经使用");
-      if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) return error(400, "诡术之境中，女巫同一晚不能同时使用解药和毒药");
+      if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) return error(400, "本版型中，女巫同一晚不能同时使用解药和毒药");
       const record = {
         night: room.night,
         stepId: step.id,
@@ -872,6 +899,12 @@ async function handleRoomAction(request, env, route) {
       .find((item) => item.action.night === room.night);
     if (!index) return error(400, "没有可撤回的夜间行动");
     const [removed] = room.nightActions.splice(index.actionIndex, 1);
+    if (removed.stepId === "siren_wind") {
+      const previousWind = [...room.nightActions].reverse().find((action) => action.stepId === "siren_wind" && action.night < room.night)?.windDirection || "calm";
+      room.windDirection = previousWind;
+      room.lastWindDirection = previousWind;
+    }
+    if (removed.stepId === "captain_board") room.boardedSeat = 0;
     refreshSwapConflict(room, room.night);
     room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
     writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
@@ -1045,20 +1078,17 @@ async function handleRoomAction(request, env, route) {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录游戏结果");
     const result = body.result;
     if (!["GOOD_WIN", "WOLF_WIN", "SKIP"].includes(result)) return error(400, "无效的结果类型");
-    try {
-      await env.DB.prepare(
-        "INSERT INTO game_results (id, board_id, room_id, result, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
-      ).bind(
-        `${room.id}-${Date.now()}`,
-        room.boardId,
-        room.id,
-        result,
-        JSON.stringify((room.assignments || []).map((a) => ({ seat: a.seat, roleId: a.roleId, camp: a.camp, alive: a.alive }))),
-        Date.now()
-      ).run();
-    } catch (e) {
-      console.error("Failed to save game result:", e.message);
-    }
+    await ensureGameResultsTable(env);
+    await env.DB.prepare(
+      "INSERT INTO game_results (id, board_id, room_id, result, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+    ).bind(
+      `${room.id}-${Date.now()}`,
+      room.boardId,
+      room.id,
+      result,
+      JSON.stringify((room.assignments || []).map((a) => ({ seat: a.seat, roleId: a.roleId, camp: a.camp, alive: a.alive }))),
+      Date.now()
+    ).run();
   } else {
     return error(404, "接口不存在");
   }
