@@ -72,7 +72,9 @@
     guard: { id: "guard", name: "守卫", camp: "GOOD", image: "assets/roles/guard.png", summary: "每晚守护一名玩家，不能连续两晚守同一人。" },
     magician: { id: "magician", name: "魔术师", camp: "GOOD", image: "assets/roles/magician.png", summary: "每晚可交换两个号码，换号影响当晚狼刀、毒药和预言家查验。" },
     order_prince: { id: "order_prince", name: "定序王子", camp: "GOOD", image: "assets/roles/order_prince.png", summary: "整局一次，在白天首轮投票结算前发动回溯，额外发言并重新投票。" },
-    trickster: { id: "trickster", name: "诡术师", camp: "WOLF", image: "assets/roles/trickster.png", summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。" }
+    trickster: { id: "trickster", name: "诡术师", camp: "WOLF", image: "assets/roles/trickster.png", summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。" },
+    siren: { id: "siren", name: "海妖", camp: "WOLF", image: "assets/roles/siren.png", summary: "每晚选择风向（无风/顺风/逆风），不可连续两晚相同。与狼人见面。死后风向固定。" },
+    captain: { id: "captain", name: "船长", camp: "GOOD", image: "assets/roles/captain.png", summary: "第二晚起必须选择一名其他玩家登船。有风时上风向玩家溺亡；无风时登船者免疫狼刀。免疫溺亡。" }
   };
 
   const BOARDS = [
@@ -89,7 +91,8 @@
         { roleId: "mixed_blood", count: 1, camp: "FOLLOW" },
         { roleId: "wolf", count: 4, camp: "WOLF" }
       ],
-      summary: "",
+      roleSummary: "预言家 · 女巫 · 猎人 · 白痴 · 混血儿 · 平民×3 · 狼人×4",
+      tagline: "经典开局，混血未定。十二人长夜由此展开。",
       globalRules: DEFAULT_RULES
     },
     {
@@ -105,7 +108,8 @@
         { roleId: "mask", count: 1, camp: "WOLF" },
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
-      summary: "",
+      roleSummary: "预言家 · 女巫 · 舞者 · 白痴 · 假面 · 平民×4 · 狼人×3",
+      tagline: "假面轻覆，舞池暗涌。三步入局，一步出局。",
       globalRules: DEFAULT_RULES
     },
     {
@@ -123,7 +127,8 @@
         { roleId: "wolf_king", count: 1, camp: "WOLF" },
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
-      summary: "",
+      roleSummary: "通灵师 · 毒师 · 猎人 · 摄梦人 · 蒙面人 · 盗宝大师 · 平民×5 · 狼王 · 狼人×3",
+      tagline: "三牌在手，一夜一变。盗宝之人，今日为谁？",
       globalRules: DEFAULT_RULES,
       specialRules: {
         treasureMaster: {
@@ -147,7 +152,8 @@
         { roleId: "mechanical_wolf", count: 1, camp: "WOLF" },
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
-      summary: "",
+      roleSummary: "通灵师 · 女巫 · 猎人 · 守卫 · 机械狼 · 平民×4 · 狼人×3",
+      tagline: "机械模仿，通灵辨真。真假之间，谁在演戏？",
       globalRules: DEFAULT_RULES
     },
     {
@@ -163,7 +169,25 @@
         { roleId: "trickster", count: 1, camp: "WOLF" },
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
-      summary: "",
+      roleSummary: "预言家 · 女巫 · 魔术师 · 定序王子 · 诡术师 · 平民×4 · 狼人×3",
+      tagline: "换号颠倒，回溯归零。十二人局，眼见为虚。",
+      globalRules: DEFAULT_RULES
+    },
+    {
+      id: "dawn_voyage",
+      name: "曙光航纪",
+      playerCount: 12,
+      roles: [
+        { roleId: "seer", count: 1, camp: "GOOD" },
+        { roleId: "witch", count: 1, camp: "GOOD" },
+        { roleId: "captain", count: 1, camp: "GOOD" },
+        { roleId: "idiot", count: 1, camp: "GOOD" },
+        { roleId: "villager", count: 4, camp: "GOOD" },
+        { roleId: "siren", count: 1, camp: "WOLF" },
+        { roleId: "wolf", count: 3, camp: "WOLF" }
+      ],
+      roleSummary: "预言家 · 女巫 · 船长 · 白痴 · 海妖 · 平民×4 · 狼人×3",
+      tagline: "海妖控风，船长掌船。十二人迷雾中航向黎明。",
       globalRules: DEFAULT_RULES
     }
   ];
@@ -195,7 +219,9 @@
     guard: "盾",
     magician: "术",
     order_prince: "序",
-    trickster: "诡"
+    trickster: "诡",
+    siren: "妖",
+    captain: "船"
   };
 
   function preloadRoleImages() {
@@ -289,6 +315,10 @@
       );
       if (witchStep) steps.push(witchStep);
       steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+      if (firstNight) {
+        steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
+        steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
+      }
     } else if (boardId === "masquerade") {
       const witchStep = createWitchStep(room);
       steps.push(
@@ -306,6 +336,10 @@
           { id: "mask_give", actor: "mask", label: "假面给予面具", targetCount: 1, allowSkip: false }
         );
       }
+      if (firstNight) {
+        steps.push({ id: "dancer_confirm", actor: "dancer", label: "舞者确认身份", targetCount: 0, allowSkip: false });
+        steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
+      }
     } else if (boardId === "treasure_master") {
       steps.push(
         { id: "treasure_pick", actor: "treasure_master", label: "盗宝大师选择今晚使用的盗宝牌", targetCount: 0, allowSkip: false, needsCard: true },
@@ -316,6 +350,10 @@
         { id: "poisoner_poison", actor: "poisoner", label: "毒师选择是否毒人", targetCount: 1, allowSkip: true },
         { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
       );
+      if (firstNight) {
+        steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
+        steps.push({ id: "masked_man_confirm", actor: "masked_man", label: "蒙面人确认身份", targetCount: 0, allowSkip: false });
+      }
     } else if (boardId === "mechanical_wolf_spirit_medium") {
       const witchStep = createWitchStep(room);
       steps.push(
@@ -327,6 +365,9 @@
         { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
         { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
       );
+      if (firstNight) {
+        steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
+      }
     } else if (boardId === "realm_of_trickery") {
       const tricksterSeats = getAvailableSwapSeats(room, "trickster_swap");
       const magicianSeats = getAvailableSwapSeats(room, "magician_swap");
@@ -340,6 +381,33 @@
       steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
       if (witchStep) steps.push(witchStep);
       steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+      if (firstNight) {
+        steps.push({ id: "order_prince_confirm", actor: "order_prince", label: "定序王子确认身份", targetCount: 0, allowSkip: false });
+      }
+    } else if (boardId === "dawn_voyage") {
+      const witchStep = createWitchStep(room);
+      const sirenAlive = (room && room.assignments || []).some((a) => a.roleId === "siren" && a.alive !== false);
+      if (sirenAlive) {
+        const lastWind = firstNight ? null : (room && room.lastWindDirection || "calm");
+        steps.push({ id: "siren_wind", actor: "siren", label: "海妖选择风向", targetCount: 0, allowSkip: false, lastWindDirection: lastWind });
+      }
+      if (!firstNight) {
+        const captainAlive = (room && room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+        if (captainAlive) {
+          const capSeat = (room && room.assignments || []).find((a) => a.roleId === "captain" && a.alive !== false).seat;
+          const aliveSeats = getAliveSeats(room).filter((s) => s !== capSeat);
+          if (aliveSeats.length) {
+            steps.push({ id: "captain_board", actor: "captain", label: "船长选择登船目标", targetCount: 1, allowSkip: false, allowedSeats: aliveSeats });
+          }
+        }
+      }
+      steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+      if (witchStep) steps.push(witchStep);
+      steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+      if (firstNight) {
+        steps.push({ id: "captain_confirm", actor: "captain", label: "船长确认身份", targetCount: 0, allowSkip: false });
+        steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
+      }
     }
     return steps.map((step, index) => ({ ...step, index }));
   }
@@ -426,7 +494,12 @@
       orderPrinceUsed: false,
       orderPrinceRevotePending: false,
       deathRecords: [],
-      exileRecords: []
+      exileRecords: [],
+      windDirection: "calm",
+      lastWindDirection: "calm",
+      boardedSeat: 0,
+      captainDiedLastDay: false,
+      captainAliveAtDawn: true
     };
   }
 
@@ -606,6 +679,7 @@
     if (actualExiledSeat) {
       const assignment = room.assignments.find((item) => item.seat === actualExiledSeat);
       if (assignment) assignment.alive = false;
+      trackCaptainDeath(room, actualExiledSeat);
     }
     const exileRecord = {
       day: room.night,
@@ -618,6 +692,33 @@
     room.exileRecords = room.exileRecords || [];
     room.exileRecords.push(exileRecord);
     writeLog(room, "EXILE_CONFIRMED", exileRecord);
+  }
+
+  function applyWind(seat, wind, boardedSeat) {
+    if (!seat || wind === "calm") return seat;
+    if (seat === boardedSeat) return seat;
+    if (wind === "tailwind") return (seat % 12) + 1;
+    if (wind === "headwind") return ((seat + 10) % 12) + 1;
+    return seat;
+  }
+
+  function getDrownedSeat(boardedSeat, wind) {
+    if (wind === "calm" || !boardedSeat) return 0;
+    if (wind === "tailwind") return ((boardedSeat + 10) % 12) + 1;
+    if (wind === "headwind") return (boardedSeat % 12) + 1;
+    return 0;
+  }
+
+  function isDrownImmune(roleId) {
+    return roleId === "siren" || roleId === "captain";
+  }
+
+  function trackCaptainDeath(room, seat) {
+    if (room.boardId !== "dawn_voyage") return;
+    const assignment = room.assignments.find((a) => a.seat === seat);
+    if (assignment && assignment.roleId === "captain") {
+      room.captainDiedLastDay = true;
+    }
   }
 
   function calculateSuggestedDeaths(room, night = room.night) {
@@ -640,12 +741,12 @@
     };
 
     const rawWolfKill = firstTarget("wolves_kill");
-    const wolfKill = mapNightSeat(room, rawWolfKill, night);
+    let wolfKill = mapNightSeat(room, rawWolfKill, night);
     const witchAction = actions.find((item) => item.stepId === "witch_action");
     const rawAntidote = witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote");
-    const antidote = mapNightSeat(room, rawAntidote, night);
+    let antidote = mapNightSeat(room, rawAntidote, night);
     const rawWitchPoison = witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison");
-    const witchPoison = mapNightSeat(room, rawWitchPoison, night);
+    let witchPoison = mapNightSeat(room, rawWitchPoison, night);
     const poisonerPoison = firstTarget("poisoner_poison");
     const guard = firstTarget("guard_guard");
     const dream = firstTarget("dreamer_dream");
@@ -654,6 +755,21 @@
     const mechanicalMimicRole = roleAtSeat(mechanicalMimicSeat);
     const mechanicalGuard = room.boardId === "mechanical_wolf_spirit_medium" && mechanicalMimicRole === "guard" ? guard : 0;
     const witchPoisonImmuneRoles = room.boardId === "masquerade" ? ["dancer", "mask"] : [];
+
+    if (room.boardId === "dawn_voyage") {
+      const wind = room.windDirection || "calm";
+      const boarded = room.boardedSeat || 0;
+      wolfKill = applyWind(wolfKill, wind, boarded);
+      antidote = applyWind(antidote, wind, boarded);
+      witchPoison = applyWind(witchPoison, wind, boarded);
+      const drownedSeat = getDrownedSeat(boarded, wind);
+      if (drownedSeat && !isDrownImmune(roleAtSeat(drownedSeat))) {
+        addDeath(drownedSeat, "溺亡");
+      }
+      if (wind === "calm" && boarded && wolfKill === boarded) {
+        wolfKill = 0;
+      }
+    }
 
     addDeath(wolfKill, "狼刀");
     if (witchPoison && !witchPoisonImmuneRoles.includes(roleAtSeat(witchPoison))) {
@@ -852,19 +968,19 @@
         : { title: "夜间已完成", detail: room.night === 1 ? "下一步进入警长竞选。" : "下一步确认天亮死亡。", action: "天亮" };
     }
     if (room.phase === "DAY" && room.night === 1 && !(room.sheriffCandidates || []).length && !room.sheriffElectionDone) {
-      return { title: "记录上警", detail: "第一夜结束后先进行警长竞选。", action: "记录上警" };
+      return { title: "白天阶段", detail: "可记录上警、天亮死亡或直接进入下一夜。", action: "记录上警" };
     }
     if (room.phase === "DAY" && room.night === 1 && !isSheriffElectionFinished(room)) {
       const activeCandidates = (room.sheriffCandidates || []).filter((seat) => !(room.sheriffWithdrawn || []).includes(seat));
-      if (!activeCandidates.length) return { title: "警徽流失", detail: "警上玩家均已退水，下一步公布死亡。", action: "记录天亮死亡" };
+      if (!activeCandidates.length) return { title: "白天阶段", detail: "警上玩家均已退水。可记录天亮死亡或直接进入下一夜。", action: "记录天亮死亡" };
       const vote = room.sheriffVoteRecord;
       return vote && vote.pkSeats && vote.pkSeats.length
         ? { title: "警徽 PK 投票", detail: `PK 玩家：${formatSeatList(vote.pkSeats)}。`, action: "记录警徽投票" }
-        : { title: "记录警徽投票", detail: `仍在警上：${formatSeatList(activeCandidates)}。`, action: "记录警徽投票" };
+        : { title: "白天阶段", detail: `警上：${formatSeatList(activeCandidates)}。可记录警徽投票、天亮死亡或进入下一夜。`, action: "记录警徽投票" };
     }
     const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
     if (room.phase === "DAY" && !daybreakRecorded) {
-      return { title: "公布死亡", detail: room.night === 1 ? "警长竞选已结束，现在公布第一夜死亡。" : "请确认昨夜死亡玩家。", action: "记录天亮死亡" };
+      return { title: "白天阶段", detail: "可选择记录天亮死亡、放逐投票或进入下一夜。", action: "记录天亮死亡" };
     }
     if (room.phase === "DAY") {
       if (room.pendingExileResult) {
@@ -887,24 +1003,34 @@
 
   function getJudgeScript(step, room) {
     if (!step) return "夜间行动已完成，法官确认死亡信息后可以天亮。";
+    const night = room && room.night || 1;
+    const isFirstNight = night === 1;
     const scripts = {
       mixed_blood_model: "混血儿请睁眼，请选择你的榜样。选择后闭眼。",
-      wolves_kill: "狼人请睁眼，请确认同伴，并选择今晚击杀目标；也可以空刀。选择后闭眼。",
-      witch_action: "今晚该玩家被击杀，使用解药比出手势，使用毒药请给出号码。",
-      witch_antidote: "今晚该玩家被击杀，使用解药比出手势，使用毒药请给出号码。",
-      witch_poison: "使用毒药请给出号码，不使用毒药请示意。",
-      seer_check: "预言家请睁眼，请查验一名玩家。法官线下只告知好人或狼人，不告知具体身份；预言家闭眼。",
+      wolves_kill: isFirstNight ? "狼人请睁眼，互认同伴，商量战术，确认击杀目标。" : "狼人请睁眼，商量战术，确认击杀目标。",
+      witch_action: "女巫请睁眼，今夜该号玩家倒牌，救人给出手势，使用毒药比出号码。",
+      witch_antidote: "女巫请睁眼，今夜该号玩家倒牌，使用解药比出手势。",
+      witch_poison: "女巫请睁眼，使用毒药请比出号码。",
+      seer_check: "预言家请睁眼，请选择查验，他的身份是。",
       dancer_dance: "舞者请睁眼，请选择三名玩家进入舞池。选择后闭眼。",
       mask_check: "假面请睁眼，请验证一名玩家是否在舞池中。记录后继续。",
-      mask_give: "假面请选择一名玩家给予面具。选择后闭眼。",
-      treasure_pick: "盗宝大师请睁眼，请从盗宝牌堆中选择今晚使用的身份牌。选择后闭眼。",
-      dreamer_dream: "摄梦人请睁眼，请选择今晚摄梦目标。选择后闭眼。",
-      poisoner_poison: "毒师请睁眼，是否使用毒药？选择目标或空过后闭眼。",
-      spirit_medium_check: "通灵师请睁眼，请查验一名存活玩家。法官线下告知具体身份牌后，通灵师闭眼。",
+      mask_give: "假面请睁眼，请选择一名玩家给予面具。选择后闭眼。",
+      treasure_pick: "盗宝大师请睁眼，你拥有的底牌分别为。请选择今晚的身份。",
+      dreamer_dream: "摄梦人请睁眼，请选择发动技能的号码。",
+      poisoner_poison: "毒师请睁眼，请选择发动技能的号码。",
+      spirit_medium_check: "通灵师请睁眼，请验人，他的身份是。",
       mechanical_mimic: "机械狼请睁眼，请选择今晚模仿的目标。记录后闭眼。",
       guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。",
-      trickster_swap: "诡术师请睁眼，请交换两个号码；也可以空换，但不能连续两晚空换。选择后闭眼并与狼人见面。",
-      magician_swap: "魔术师请睁眼，请交换两个号码；也可以空换。选择后闭眼。"
+      trickster_swap: "诡术师请睁眼，确认交换的目标。",
+      magician_swap: "魔术师请睁眼，确认交换的目标。",
+      siren_wind: "海妖请睁眼，请选择今晚的风向。无风、顺风还是逆风？选择后闭眼并与狼人见面。",
+      captain_board: "船长请睁眼，请选择今晚登船的玩家。选择后闭眼。",
+      hunter_confirm: "猎人请睁眼，请确认你的开枪状态。",
+      idiot_confirm: "白痴请睁眼，请确认身份。",
+      dancer_confirm: "舞者请睁眼，请确认身份。",
+      masked_man_confirm: "蒙面人请睁眼，请确认身份。",
+      captain_confirm: "船长请睁眼，请确认身份。",
+      order_prince_confirm: "定序王子请睁眼，请确认身份。"
     };
     return scripts[step.id] || `${step.label}。记录完成后进入下一步。`;
   }
@@ -913,7 +1039,10 @@
     if (!step || !["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id)) return "";
     const selectedSeat = targetSeats && targetSeats.length ? Number(targetSeats[0]) : 0;
     if (!selectedSeat) return "选择目标后，这里会显示需要告知角色的结果。";
-    const seat = step.id === "seer_check" ? mapNightSeat(room, selectedSeat, room.night) : selectedSeat;
+    let seat = step.id === "seer_check" ? mapNightSeat(room, selectedSeat, room.night) : selectedSeat;
+    if (step.id === "seer_check" && room.boardId === "dawn_voyage") {
+      seat = applyWind(seat, room.windDirection || "calm", room.boardedSeat || 0);
+    }
     const assignment = (room.assignments || []).find((item) => item.seat === seat);
     if (!assignment) return `${seat}号：未找到身份`;
     const role = getRole(assignment.roleId) || { name: assignment.roleId };
@@ -980,6 +1109,11 @@
     if (action.stepId === "dancer_dance") return `舞者选择舞池 ${seatText}`;
     if (action.stepId === "mask_check") return `假面验证 ${seatText}`;
     if (action.stepId === "mask_give") return `假面给面具 ${seatText}`;
+    if (action.stepId === "siren_wind") {
+      const windName = { calm: "无风", tailwind: "顺风", headwind: "逆风" };
+      return `海妖选择：${windName[action.windDirection] || action.windDirection}`;
+    }
+    if (action.stepId === "captain_board") return `船长登船 ${seatText}`;
     return `${action.label || "夜间行动"}${action.skipped ? "：空过" : action.cardRoleId ? `：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}` : seats.length ? `：${seatText}` : ""}`;
   }
 
@@ -1203,7 +1337,7 @@
           <span class="tag">MVP</span>
         </div>
         <div class="list">
-          ${BOARDS.map((board) => `<div class="list-item board-item"><div><div class="board-name">${board.name}</div><div class="board-meta">12 人 · 屠边 · 可上警</div></div><span class="tag">可发牌</span></div>`).join("")}
+          ${BOARDS.map((board) => `<div class="list-item board-item"><div><div class="board-name">${board.name}</div><div class="board-meta">${board.roleSummary || "12 人 · 屠边 · 可上警"}</div></div><span class="tag">可发牌</span></div>`).join("")}
         </div>
       </section>
     `;
@@ -1226,7 +1360,7 @@
             ${BOARDS.map((board) => `<option value="${board.id}">${board.name}</option>`).join("")}
           </select>
         </label>
-        <div class="body-text ${BOARDS[0].summary ? "" : "hidden"}" id="boardSummary">${BOARDS[0].summary}</div>
+        <div class="body-text" id="boardTagline">${BOARDS[0].tagline || ""}</div>
       </section>
       <button class="button primary" data-action="create-room">创建</button>
       <button class="button" data-action="view" data-view="home">返回</button>
@@ -1243,9 +1377,10 @@
 
     app.querySelector("#boardSelect").addEventListener("change", (event) => {
       const board = getBoard(event.target.value);
-      const summary = app.querySelector("#boardSummary");
-      summary.textContent = board.summary;
-      summary.classList.toggle("hidden", !board.summary);
+      const summary = app.querySelector("#boardTagline");
+      const tagline = app.querySelector("#boardTagline");
+      tagline.textContent = board.tagline || "";
+      tagline.classList.toggle("hidden", !board.tagline);
     });
 
     app.querySelector("[data-action='create-room']").addEventListener("click", async () => {
@@ -1361,8 +1496,8 @@
     const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
     const sheriffElectionDone = isSheriffElectionFinished(room);
     const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
-    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && sheriffElectionDone && !daybreakRecorded;
-    const canRunDayActions = room.phase === "DAY" && isJudge && daybreakRecorded;
+    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && !daybreakRecorded;
+    const canRunDayActions = room.phase === "DAY" && isJudge;
     const pendingExileResult = room.pendingExileResult || null;
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
@@ -1372,16 +1507,16 @@
       room.phase === "DEALT" && isJudge ? '<button class="button primary" data-action="start-night">开始第一夜</button>' : "",
       room.phase === "DAY" && room.night === 1 && isJudge ? '<button class="button" data-action="view" data-view="sheriff">记录上警</button>' : "",
       room.phase === "DAY" && room.night === 1 && isJudge && sheriffCandidates.length ? '<button class="button" data-action="view" data-view="withdraw">记录退水</button>' : "",
-      canSelfWithdraw ? '<button class="button primary" data-action="self-withdraw">我要退水</button>' : "",
+      canSelfWithdraw ? '<button class="button" data-action="self-withdraw">我要退水</button>' : "",
       room.phase === "DAY" && room.night === 1 && isJudge && sheriffActive.length ? '<button class="button" data-action="view" data-view="sheriffVote">记录警徽投票</button>' : "",
       !gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : "",
       canRecordDaybreakDeaths ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
       canRecordDaybreakDeaths && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
-      canRunDayActions && pendingExileResult ? '<button class="button primary" data-action="view" data-view="orderPrince">处理投票结果</button>' : "",
+      canRunDayActions && pendingExileResult ? '<button class="button" data-action="view" data-view="orderPrince">处理投票结果</button>' : "",
       canRunDayActions && !pendingExileResult ? `<button class="button" data-action="view" data-view="dayVote">${room.orderPrinceRevotePending ? "记录回溯重投" : "记录放逐投票"}</button>` : "",
-      canRunDayActions && !pendingExileResult ? '<button class="button" data-action="view" data-view="exile">手动记录放逐</button>' : "",
+      canRunDayActions && !pendingExileResult ? '<button class="button primary" data-action="view" data-view="exile">手动记录放逐</button>' : "",
       canRunDayActions && !pendingExileResult && !room.orderPrinceRevotePending ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
-      room.phase === "NIGHT" && isJudge ? '<button class="button primary" data-action="view" data-view="night">继续夜间流程</button>' : "",
+      room.phase === "NIGHT" && isJudge ? '<button class="button" data-action="view" data-view="night">继续夜间流程</button>' : "",
       room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
     const infoActions = [
@@ -1425,6 +1560,13 @@
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
         <div class="notice">${isJudge ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
+        ${room.boardId === "dawn_voyage" && room.phase === "DAY" && room.lastWindDirection ? (() => {
+          const windName = { calm: "无风", tailwind: "顺风", headwind: "逆风" };
+          const captainAlive = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+          const captainDiedThisNight = room.captainAliveAtDawn && !captainAlive;
+          const label = captainAlive ? "昨夜" + windName[room.lastWindDirection] : captainDiedThisNight ? "昨夜" + windName[room.lastWindDirection] + "（法官宣布）" : "";
+          return label ? '<div class="notice" style="color:var(--accent);font-weight:600;">' + label + '</div>' : "";
+        })() : ""}
         <div class="notice">${isJudge ? `下一步：${judgeNextStep.title}。${judgeNextStep.detail}` : getPlayerPhaseText(room, mySeat)}</div>
       </section>
       <section class="panel">
@@ -1584,11 +1726,22 @@
         <section class="panel">
           <div class="label">今晚死亡信息</div>
           <div class="value">${witchAntidoteTarget ? `${witchAntidoteTarget}号` : "无人"}</div>
-          <div class="notice">解药只记录“救”或“不救”。使用后，后续夜晚将跳过解药环节。</div>
+          <div class="notice">解药只记录"救"或"不救"。使用后，后续夜晚将跳过解药环节。</div>
+        </section>
+      ` : step.id === "siren_wind" ? `
+        <section class="panel">
+          <div class="label">选择风向</div>
+          <div class="notice">海妖选择今晚的风向${step.lastWindDirection ? `，不可与昨晚相同（昨晚：${step.lastWindDirection === "tailwind" ? "顺风" : step.lastWindDirection === "headwind" ? "逆风" : "无风"}）` : ""}</div>
+          <div class="action-row" style="flex-wrap:wrap;gap:8px;">
+            <button class="button" data-action="night-wind" data-wind="calm" ${step.lastWindDirection === "calm" ? "disabled" : ""} style="flex:1;min-width:80px;">无风</button>
+            <button class="button" data-action="night-wind" data-wind="tailwind" ${step.lastWindDirection === "tailwind" ? "disabled" : ""} style="flex:1;min-width:80px;">顺风</button>
+            <button class="button" data-action="night-wind" data-wind="headwind" ${step.lastWindDirection === "headwind" ? "disabled" : ""} style="flex:1;min-width:80px;">逆风</button>
+          </div>
         </section>
       ` : step.needsCard ? `
         <section class="panel">
           <div class="label">选择盗宝牌</div>
+          ${room && room.boardId === "treasure_master" && room.night >= 2 ? `<div class="notice">你的带刀状态为：有刀</div>` : room && room.boardId === "treasure_master" ? `<div class="notice">你的带刀状态为：无刀（首夜狼人无法刀人）</div>` : ""}
           <div class="card-options">
             ${treasureCards.map((card) => `<button class="card-option" data-action="night-card" data-role="${card.id}">${card.name}</button>`).join("")}
           </div>
@@ -1613,6 +1766,7 @@
         <div class="list">
           ${currentNightActions.length ? currentNightActions.map((action) => `<div class="list-item"><div><div class="night-record-main">${escapeHtml(formatNightAction(action).replace(`${action.label || "夜间行动"}：`, ""))}</div><div class="night-record-sub">${escapeHtml(action.label || "夜间行动")}</div></div></div>`).join("") : '<div class="empty">暂无记录</div>'}
         </div>
+        ${room.boardId === "dawn_voyage" ? `<div class="notice">当夜风向：${room.windDirection === "tailwind" ? "顺风" : room.windDirection === "headwind" ? "逆风" : "无风"}${room.boardedSeat ? ` · 登船：${room.boardedSeat}号` : ""}</div>` : ""}
         <div class="notice">${suggestedDeaths.length ? `当前建议死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}` : "当前建议死亡：无"}</div>
       </section>
 
@@ -1624,7 +1778,7 @@
               <button class="button primary" data-action="night-witch-submit" data-use-poison="true">使用毒药</button>
               <button class="button" data-action="night-witch-submit" data-use-poison="false">不使用毒药</button>
             ` : '<button class="button primary" data-action="night-witch-submit" data-use-poison="false">确认女巫操作</button>'}
-          ` : `
+          ` : step.id === "siren_wind" ? "" : `
             <button class="button primary" data-action="night-submit">${nightSubmitLabel}</button>
             ${step.allowSkip ? `<button class="button" data-action="night-skip">${nightSkipLabel}</button>` : ""}
           `}
@@ -1903,6 +2057,32 @@
     `;
   }
 
+  function renderGameEnd() {
+    const room = getCurrentRoom();
+    if (!room) return setView("home");
+    const isJudge = !IS_REMOTE || room.isJudge;
+    if (!isJudge) {
+      app.innerHTML = `
+        ${pageHeader("游戏结束", "等待法官确认结果")}
+        <button class="button" data-action="view" data-view="room">返回房间</button>
+      `;
+      return;
+    }
+    app.innerHTML = `
+      ${pageHeader("游戏结束", "请确认本局获胜方")}
+      <section class="panel">
+        <div class="label">选择获胜阵营</div>
+        <div class="notice">此记录将永久保存，用于统计和复盘。</div>
+      </section>
+      <div class="action-row" style="grid-template-columns:1fr 1fr 1fr;">
+        <button class="button primary" data-action="game-result" data-result="GOOD_WIN" style="background:#4a90d9;">好人获胜</button>
+        <button class="button primary" data-action="game-result" data-result="WOLF_WIN" style="background:#d94a4a;">狼人获胜</button>
+        <button class="button" data-action="game-result-skip">跳过</button>
+      </div>
+      <button class="button" data-action="view" data-view="room">返回房间</button>
+    `;
+  }
+
   function renderReview() {
     const room = getCurrentRoom();
     if (!room) return setView("home");
@@ -1965,6 +2145,7 @@
     if (state.view === "badge") return renderBadge();
     if (state.view === "judge") return renderJudge();
     if (state.view === "review") return renderReview();
+    if (state.view === "gameEnd") return renderGameEnd();
     return renderHome();
   }
 
@@ -2085,6 +2266,10 @@
         }
         room.night = (room.night || 0) + 1;
         room.phase = "NIGHT";
+        room.lastWindDirection = room.windDirection || "calm";
+        room.boardedSeat = 0;
+        room.captainAliveAtDawn = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+        room.captainDiedLastDay = false;
         room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
         room.currentNightStepIndex = 0;
         room.nightActions = room.nightActions || [];
@@ -2203,14 +2388,55 @@
           .find((item) => item.nightAction.night === room.night);
         if (!index) return;
         const [removed] = room.nightActions.splice(index.actionIndex, 1);
+        if (removed.stepId === "siren_wind") {
+          const prevWind = [...(room.nightActions || [])].reverse().find((a) => a.stepId === "siren_wind" && a.night === room.night);
+          if (prevWind && prevWind.windDirection) {
+            room.windDirection = prevWind.windDirection;
+            room.lastWindDirection = prevWind.lastWindDirection || (room.night > 1 ? null : "calm");
+          } else {
+            room.windDirection = room.lastWindDirection || "calm";
+            room.lastWindDirection = room.night > 1 ? (room.nightActions || []).reverse().find((a) => a.stepId === "siren_wind" && a.night < room.night)?.windDirection || "calm" : "calm";
+          }
+        }
+        if (removed.stepId === "captain_board") {
+          const prevBoard = [...(room.nightActions || [])].reverse().find((a) => a.stepId === "captain_board" && a.night === room.night);
+          room.boardedSeat = prevBoard && prevBoard.targetSeats && prevBoard.targetSeats.length ? prevBoard.targetSeats[0] : 0;
+        }
         refreshSwapConflict(room, room.night);
-        room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
         writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
         saveState();
         render();
       } catch (error) {
         window.alert(error.message);
       }
+      return;
+    }
+
+    if (action === "night-wind" && room) {
+      const step = room.currentNightSteps[room.currentNightStepIndex || 0];
+      if (!step || step.id !== "siren_wind") return;
+      const wind = target.dataset.wind;
+      if (!wind) return;
+      if (room.night > 1 && wind === room.lastWindDirection) { window.alert("不可连续两晚选择相同风向"); return; }
+      try {
+        if (IS_REMOTE) {
+          await remotePost("night-action", { skipped: false, targetSeats: [], cardRoleId: "", windDirection: wind });
+          render();
+          return;
+        }
+        room.lastWindDirection = room.windDirection || "calm";
+        room.windDirection = wind;
+        const actionRecord = {
+          night: room.night, stepId: step.id, label: step.label,
+          targetSeats: [], skipped: false, cardRoleId: "", windDirection: wind, createdAt: Date.now()
+        };
+        room.nightActions = room.nightActions || [];
+        room.nightActions.push(actionRecord);
+        writeLog(room, "NIGHT_ACTION", actionRecord);
+        room.currentNightStepIndex = (room.currentNightStepIndex || 0) + 1;
+        saveState();
+        render();
+      } catch (error) { window.alert(error.message); }
       return;
     }
 
@@ -2265,6 +2491,9 @@
         };
         room.nightActions = room.nightActions || [];
         room.nightActions.push(actionRecord);
+        if (step.id === "captain_board" && targetSeats.length) {
+          room.boardedSeat = targetSeats[0];
+        }
         refreshSwapConflict(room, room.night);
         writeLog(room, "NIGHT_ACTION", actionRecord);
         room.currentNightStepIndex = (room.currentNightStepIndex || 0) + 1;
@@ -2281,7 +2510,7 @@
         if (IS_REMOTE) {
           await remotePost("night-finish");
           state.deathDraftSeats = calculateSuggestedDeaths(state.remoteRoom, state.remoteRoom.night).map((item) => item.seat);
-          state.view = state.remoteRoom.night === 1 ? "sheriff" : "death";
+          state.view = "room";
           saveState();
           render();
           return;
@@ -2289,7 +2518,7 @@
         room.phase = "DAY";
         writeLog(room, "NIGHT_FINISHED", { night: room.night });
         state.deathDraftSeats = calculateSuggestedDeaths(room, room.night).map((item) => item.seat);
-        state.view = room.night === 1 ? "sheriff" : "death";
+        state.view = "room";
         saveState();
         render();
       } catch (error) {
@@ -2449,6 +2678,7 @@
         seats.forEach((seat) => {
           const assignment = room.assignments.find((item) => item.seat === seat);
           if (assignment) assignment.alive = false;
+          trackCaptainDeath(room, seat);
         });
         const record = { day: room.night, phase: "DAYBREAK", seats, createdAt: Date.now() };
         room.deathRecords = room.deathRecords || [];
@@ -2565,6 +2795,7 @@
         if (!noExile) {
           const assignment = room.assignments.find((item) => item.seat === seat);
           if (assignment) assignment.alive = false;
+          trackCaptainDeath(room, seat);
         }
         const record = { day: room.night, seat, noExile, createdAt: Date.now() };
         room.exileRecords = room.exileRecords || [];
@@ -2621,19 +2852,47 @@
       return;
     }
 
+    if ((action === "game-result" || action === "game-result-skip") && room) {
+      try {
+        const result = action === "game-result-skip" ? "SKIP" : target.dataset.result;
+        const historyEntry = {
+          boardId: room.boardId,
+          roomId: room.id,
+          result,
+          assignments: (room.assignments || []).map((a) => ({ seat: a.seat, roleId: a.roleId, camp: a.camp, alive: a.alive })),
+          createdAt: Date.now()
+        };
+        if (IS_REMOTE) {
+          await remotePost("game-result", { result, assignments: historyEntry.assignments });
+        } else {
+          const historyKey = "twelve_midnight_game_history_v1";
+          let history = [];
+          try { history = JSON.parse(localStorage.getItem(historyKey) || "[]"); } catch (e) {}
+          history.push(historyEntry);
+          localStorage.setItem(historyKey, JSON.stringify(history));
+        }
+        state.view = "room";
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
     if (action === "game-end" && room) {
       if (!window.confirm("确定结束游戏？")) return;
       try {
         if (IS_REMOTE) {
           await remotePost("game-end");
-          state.view = "room";
+          state.view = "gameEnd";
           saveState();
           render();
           return;
         }
         room.phase = "GAME_OVER";
         writeLog(room, "GAME_ENDED", {});
-        state.view = "room";
+        state.view = "gameEnd";
         saveState();
         render();
       } catch (error) {

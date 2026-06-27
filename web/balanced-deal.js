@@ -11,7 +11,8 @@
   const TEMPERATURE = 3;
   const KEY_ROLE_PAIRS = {
     masquerade: ["dancer", "mask"],
-    realm_of_trickery: ["magician", "trickster"]
+    realm_of_trickery: ["magician", "trickster"],
+    dawn_voyage: ["siren", "captain"]
   };
 
   function average(values) {

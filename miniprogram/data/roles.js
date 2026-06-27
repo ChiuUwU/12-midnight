@@ -118,6 +118,18 @@ const ROLES = {
     name: "诡术师",
     camp: "WOLF",
     summary: "每晚可交换两个号码，换号影响次日放逐，且不能连续两晚空换。"
+  },
+  siren: {
+    id: "siren",
+    name: "海妖",
+    camp: "WOLF",
+    summary: "每晚选择风向（无风/顺风/逆风），不可连续两晚相同。与狼人见面，参与刀人。死后风向固定。"
+  },
+  captain: {
+    id: "captain",
+    name: "船长",
+    camp: "GOOD",
+    summary: "第二晚起每晚必须选择一名其他玩家登船。有风时上风向玩家溺亡；无风时登船者免疫狼刀。免疫溺亡。"
   }
 };
 

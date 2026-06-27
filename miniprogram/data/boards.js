@@ -103,6 +103,22 @@ const BOARDS = [
     ],
     summary: "",
     globalRules: DEFAULT_RULES
+  },
+  {
+    id: "dawn_voyage",
+    name: "曙光航纪",
+    playerCount: 12,
+    roles: [
+      { roleId: "seer", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "captain", count: 1, camp: "GOOD" },
+      { roleId: "idiot", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 4, camp: "GOOD" },
+      { roleId: "siren", count: 1, camp: "WOLF" },
+      { roleId: "wolf", count: 3, camp: "WOLF" }
+    ],
+    summary: "海妖控风，船长掌船。十二人迷雾中航向黎明。",
+    globalRules: { ...DEFAULT_RULES, witchCanSelfSaveFirstNight: false }
   }
 ];
 

@@ -104,6 +104,21 @@ const BOARDS = [
       { roleId: "wolf", count: 3, camp: "WOLF" }
     ],
     globalRules: DEFAULT_RULES
+  },
+  {
+    id: "dawn_voyage",
+    name: "曙光航纪",
+    playerCount: 12,
+    roles: [
+      { roleId: "seer", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "captain", count: 1, camp: "GOOD" },
+      { roleId: "idiot", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 4, camp: "GOOD" },
+      { roleId: "siren", count: 1, camp: "WOLF" },
+      { roleId: "wolf", count: 3, camp: "WOLF" }
+    ],
+    globalRules: DEFAULT_RULES
   }
 ];
 
@@ -403,6 +418,26 @@ function createNightSteps(boardId, night, room = null) {
     steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) steps.push(witchStep);
     steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+  } else if (boardId === "dawn_voyage") {
+    const witchStep = createWitchStep(room);
+    const sirenAlive = (room && room.assignments || []).some((a) => a.roleId === "siren" && a.alive !== false);
+    if (sirenAlive) {
+      const lastWind = firstNight ? null : (room && room.lastWindDirection || "calm");
+      steps.push({ id: "siren_wind", actor: "siren", label: "海妖选择风向", targetCount: 0, allowSkip: false, lastWindDirection: lastWind });
+    }
+    if (!firstNight) {
+      const captainAlive = (room && room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+      if (captainAlive) {
+        const capSeat = (room && room.assignments || []).find((a) => a.roleId === "captain" && a.alive !== false).seat;
+        const aliveSeats = (room && room.assignments || []).filter((a) => a.alive !== false && a.seat !== capSeat).map((a) => a.seat).sort((a, b) => a - b);
+        if (aliveSeats.length) {
+          steps.push({ id: "captain_board", actor: "captain", label: "船长选择登船目标", targetCount: 1, allowSkip: false, allowedSeats: aliveSeats });
+        }
+      }
+    }
+    steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+    if (witchStep) steps.push(witchStep);
+    steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
   }
   return steps.map((step, index) => ({ ...step, index }));
 }
@@ -513,7 +548,12 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     orderPrinceRevotePending: judge ? Boolean(room.orderPrinceRevotePending) : false,
     judgeCode: judge ? room.judgeCode : "",
     deathRecords: room.deathRecords || [],
-    exileRecords: room.exileRecords || []
+    exileRecords: room.exileRecords || [],
+    windDirection: judge ? room.windDirection || "calm" : "",
+    lastWindDirection: judge ? room.lastWindDirection || "calm" : "",
+    boardedSeat: judge ? room.boardedSeat || 0 : 0,
+    captainDiedLastDay: judge ? Boolean(room.captainDiedLastDay) : false,
+    captainAliveAtDawn: judge ? Boolean(room.captainAliveAtDawn) : false
   };
 }
 
@@ -644,6 +684,11 @@ async function handleCreateRoom(request, env) {
     orderPrinceRevotePending: false,
     deathRecords: [],
     exileRecords: [],
+    windDirection: "calm",
+    lastWindDirection: "calm",
+    boardedSeat: 0,
+    captainDiedLastDay: false,
+    captainAliveAtDawn: true,
     createdAt: Date.now()
   };
   writeLog(room, "ROOM_CREATED", { mode: room.mode, boardId: room.boardId });
@@ -741,6 +786,10 @@ async function handleRoomAction(request, env, route) {
     if (room.pendingExileResult || room.orderPrinceRevotePending) return error(400, "请先完成定序王子的投票流程");
     room.night += 1;
     room.phase = "NIGHT";
+    room.lastWindDirection = room.windDirection || "calm";
+    room.boardedSeat = 0;
+    room.captainAliveAtDawn = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+    room.captainDiedLastDay = false;
     room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
     room.currentNightStepIndex = 0;
     writeLog(room, "NIGHT_STARTED", { night: room.night });
@@ -752,6 +801,21 @@ async function handleRoomAction(request, env, route) {
     const targetSeats = uniqueSeats(body.targetSeats);
     const skipped = Boolean(body.skipped);
     const cardRoleId = body.cardRoleId || "";
+    if (step.id === "siren_wind") {
+      const wind = body.windDirection;
+      if (!["calm", "tailwind", "headwind"].includes(wind)) return error(400, "风向不合法");
+      if (room.night > 1 && wind === room.lastWindDirection) return error(400, "不可连续两晚选择相同风向");
+      room.lastWindDirection = room.windDirection || "calm";
+      room.windDirection = wind;
+      room.nightActions.push({
+        night: room.night, stepId: step.id, label: step.label,
+        targetSeats: [], skipped: false, cardRoleId: "", windDirection: wind, createdAt: Date.now()
+      });
+      writeLog(room, "NIGHT_ACTION", { stepId: step.id, windDirection: wind });
+      room.currentNightStepIndex += 1;
+      await saveRoom(env, room);
+      return json({ room: await sanitizeRoom(room, clientId, env, judgeToken) });
+    }
     if (step.id === "witch_action") {
       const antidoteUsed = Boolean(body.antidoteUsed) && step.antidoteAvailable;
       const wolfAction = [...room.nightActions].reverse().find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
@@ -794,6 +858,9 @@ async function handleRoomAction(request, env, route) {
       createdAt: Date.now()
     };
     room.nightActions.push(record);
+    if (step.id === "captain_board" && targetSeats.length) {
+      room.boardedSeat = targetSeats[0];
+    }
     refreshSwapConflict(room, room.night);
     writeLog(room, "NIGHT_ACTION", record);
     room.currentNightStepIndex += 1;
@@ -974,6 +1041,24 @@ async function handleRoomAction(request, env, route) {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以结束游戏");
     room.phase = "GAME_OVER";
     writeLog(room, "GAME_ENDED", {});
+  } else if (route.action === "game-result") {
+    if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录游戏结果");
+    const result = body.result;
+    if (!["GOOD_WIN", "WOLF_WIN", "SKIP"].includes(result)) return error(400, "无效的结果类型");
+    try {
+      await env.DB.prepare(
+        "INSERT INTO game_results (id, board_id, room_id, result, data, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)"
+      ).bind(
+        `${room.id}-${Date.now()}`,
+        room.boardId,
+        room.id,
+        result,
+        JSON.stringify((room.assignments || []).map((a) => ({ seat: a.seat, roleId: a.roleId, camp: a.camp, alive: a.alive }))),
+        Date.now()
+      ).run();
+    } catch (e) {
+      console.error("Failed to save game result:", e.message);
+    }
   } else {
     return error(404, "接口不存在");
   }

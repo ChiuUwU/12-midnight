@@ -189,6 +189,26 @@ function createNightSteps(boardId, night, room = null) {
     common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) common.push(witchStep);
     common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+  } else if (boardId === "dawn_voyage") {
+    const witchStep = createWitchStep(room);
+    const sirenAlive = (room && room.assignments || []).some((a) => a.roleId === "siren" && a.alive !== false);
+    if (sirenAlive) {
+      const lastWind = firstNight ? null : (room && room.lastWindDirection || "calm");
+      common.push({ id: "siren_wind", actor: "siren", label: "海妖选择风向", targetCount: 0, allowSkip: false, lastWindDirection: lastWind });
+    }
+    if (!firstNight) {
+      const captainAlive = (room && room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+      if (captainAlive) {
+        const capSeat = (room && room.assignments || []).find((a) => a.roleId === "captain" && a.alive !== false).seat;
+        const aliveSeats = (room && room.assignments || []).filter((a) => a.alive !== false && a.seat !== capSeat).map((a) => a.seat).sort((a, b) => a - b);
+        if (aliveSeats.length) {
+          common.push({ id: "captain_board", actor: "captain", label: "船长选择登船目标", targetCount: 1, allowSkip: false, allowedSeats: aliveSeats });
+        }
+      }
+    }
+    common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
+    if (witchStep) common.push(witchStep);
+    common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
   }
   return common.map((step, index) => ({ ...step, index }));
 }
@@ -272,7 +292,12 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     orderPrinceRevotePending: judge ? Boolean(room.orderPrinceRevotePending) : false,
     judgeCode: judge ? room.judgeCode : "",
     deathRecords: room.deathRecords || [],
-    exileRecords: room.exileRecords || []
+    exileRecords: room.exileRecords || [],
+    windDirection: judge ? room.windDirection || "calm" : "",
+    lastWindDirection: judge ? room.lastWindDirection || "calm" : "",
+    boardedSeat: judge ? room.boardedSeat || 0 : 0,
+    captainDiedLastDay: judge ? Boolean(room.captainDiedLastDay) : false,
+    captainAliveAtDawn: judge ? Boolean(room.captainAliveAtDawn) : false
   };
 }
 
@@ -409,6 +434,11 @@ async function handleApi(request, response, url) {
       orderPrinceRevotePending: false,
       deathRecords: [],
       exileRecords: [],
+      windDirection: "calm",
+      lastWindDirection: "calm",
+      boardedSeat: 0,
+      captainDiedLastDay: false,
+      captainAliveAtDawn: true,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -736,6 +766,10 @@ async function handleApi(request, response, url) {
     if (room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成定序王子的投票流程");
     room.night += 1;
     room.phase = "NIGHT";
+    room.lastWindDirection = room.windDirection || "calm";
+    room.boardedSeat = 0;
+    room.captainAliveAtDawn = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
+    room.captainDiedLastDay = false;
     room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
     room.currentNightStepIndex = 0;
     writeLog(room, "NIGHT_STARTED", { night: room.night });
@@ -752,6 +786,23 @@ async function handleApi(request, response, url) {
     const targetSeats = Array.isArray(body.targetSeats) ? [...new Set(body.targetSeats.map(Number).filter(Boolean))] : [];
     const skipped = Boolean(body.skipped);
     const cardRoleId = body.cardRoleId || "";
+
+    if (step.id === "siren_wind") {
+      const wind = body.windDirection;
+      if (!["calm", "tailwind", "headwind"].includes(wind)) return sendError(response, 400, "风向不合法");
+      if (room.night > 1 && wind === room.lastWindDirection) return sendError(response, 400, "不可连续两晚选择相同风向");
+      room.lastWindDirection = room.windDirection || "calm";
+      room.windDirection = wind;
+      const actionRecord = {
+        night: room.night, stepId: step.id, label: step.label,
+        targetSeats: [], skipped: false, cardRoleId: "", windDirection: wind, createdAt: Date.now()
+      };
+      room.nightActions = room.nightActions || [];
+      room.nightActions.push(actionRecord);
+      writeLog(room, "NIGHT_ACTION", actionRecord);
+      room.currentNightStepIndex += 1;
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
 
     if (step.id === "witch_action") {
       const antidoteUsed = Boolean(body.antidoteUsed) && step.antidoteAvailable;
@@ -802,6 +853,9 @@ async function handleApi(request, response, url) {
       createdAt: Date.now()
     };
     room.nightActions.push(actionRecord);
+    if (step.id === "captain_board" && targetSeats.length) {
+      room.boardedSeat = targetSeats[0];
+    }
     refreshSwapConflict(room, room.night);
     writeLog(room, "NIGHT_ACTION", actionRecord);
     room.currentNightStepIndex += 1;
@@ -863,6 +917,32 @@ async function handleApi(request, response, url) {
     writeLog(room, "GAME_ENDED", {});
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
+    });
+  }
+
+  if (target.action === "game-result") {
+    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录游戏结果");
+    const result = body.result;
+    if (!["GOOD_WIN", "WOLF_WIN", "SKIP"].includes(result)) return sendError(response, 400, "无效的结果类型");
+    const entry = {
+      boardId: room.boardId,
+      roomId: room.id,
+      result,
+      assignments: (room.assignments || []).map((a) => ({ seat: a.seat, roleId: a.roleId, camp: a.camp, alive: a.alive })),
+      createdAt: Date.now()
+    };
+    try {
+      const historyPath = path.join(__dirname, "game_history.json");
+      let history = [];
+      try { history = JSON.parse(fs.readFileSync(historyPath, "utf8")); } catch (e) {}
+      history.push(entry);
+      fs.writeFileSync(historyPath, JSON.stringify(history, null, 2), "utf8");
+    } catch (e) {
+      console.error("Failed to save game history:", e.message);
+    }
+    return sendJson(response, 200, {
+      room: sanitizeRoom(room, { clientId, judgeToken }),
+      saved: true
     });
   }
 

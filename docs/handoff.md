@@ -1,75 +1,60 @@
-# 十二点天黑交接文档
+# 十二点天黑 — 当前开发状态
 
-## 当前目标
+> 基准提交：`0be5191`  
+> 当前分支：`claude/dawn-voyage-p0-fixes`  
+> 实现负责人：Claude  
 
-做一个手机友好的狼人杀发牌/法官辅助网页。当前优先有法官版本：法官创建房间、玩家手机加入选座、看身份，法官推进夜间流程和白天关键记录。
+## 本轮目标
 
-## 运行方式
+曙光航纪版型 P0 修复 + 文档更新 + 准备提交。
 
-- 静态演示：直接打开 `web/index.html`，数据只在当前浏览器。
-- 本地联机：双击 `start-web-server.cmd` 或执行 `node server.js`，访问 `http://localhost:5173`，同 Wi-Fi 手机访问电脑 IP。
-- 线上免费版：Cloudflare Pages + Functions + D1，见 `docs/cloudflare-deploy.md`。
+## 已完成
 
-## 主要文件
+- ✅ 曙光航纪全栈实现（前后端 + Cloudflare）
+- ✅ 法官台词全版型重写
+- ✅ 神职首夜确认步骤
+- ✅ 游戏结果永久记录（静态/本地/Cloudflare）
+- ✅ 版型标语 & 首页身份配置
+- ✅ 6 版型规则详解文档 (`docs/board-guide-v1.0.md`)
+- ✅ AI 协作规范 (`docs/ai-collaboration-v1.0.md`)
+- ✅ P0-1: 海妖死亡后不再出现选风步骤
+- ✅ P0-2: 船长死亡后不再出现登船步骤
+- ✅ P0-3: Cloudflare 首夜无风可用
+- ✅ P0-4: 撤回操作正确恢复风向和登船状态
+- ✅ P0-5: 风向/登船信息只对法官可见
+- ✅ P0-6: 船长昼死/夜死的风向公布逻辑修复
 
-- `web/index.html`：网页入口。
-- `web/styles.css`：手机端界面样式。
-- `web/app.js`：前端状态、页面渲染、本地模式逻辑、远程 API 调用。
-- `server.js`：本地 Node HTTP 服务，内存保存房间。
-- `functions/api/rooms/[[path]].js`：Cloudflare Pages Functions 线上 API，D1 保存房间。
-- `db/schema.sql`：D1 表结构。
-- `web/assets/roles/`：角色牌图。
-- `web/assets/app-icon.png`：应用头像。
+## 修改文件
 
-## 关键产品规则
+- `web/app.js` — 曙光航纪 + 台词 + 确认步骤 + 游戏结果 + P0 修复
+- `server.js` — 同步曙光航纪 + 游戏结果存储 + P0 修复
+- `functions/api/rooms/[[path]].js` — 同步 Cloudflare + P0 修复
+- `miniprogram/data/roles.js` — +siren, +captain
+- `miniprogram/data/boards.js` — +dawn_voyage
+- `web/balanced-deal.js` — KEY_ROLE_PAIRS +dawn_voyage
+- `db/schema.sql` — +game_results 表
+- `CLAUDE.md` — 6 版型 21 角色
+- `docs/board-dawn-voyage-v1.0.md` — 曙光航纪设计文档
+- `docs/board-guide-v1.0.md` — 6 版型规则详解
+- `docs/ai-collaboration-v1.0.md` — AI 协作规范
+- `docs/handoff.md` — 本文件
+- `web/assets/roles/siren.png`, `captain.png` — 角色卡牌
 
-- 默认 12 人局、屠边、可上警、有遗言，夜死无遗言。
-- 法官是“法官席”，不占 1-12 号座位。创建房间者自动拿到法官权限，其他设备可用 4 位法官口令进入法官席。
-- 盗宝大师当前固定狼人阵营，三张盗宝牌固定包含狼人、平民、一张神职牌；神职牌和场上好人神职不重复。当前不允许盗宝蒙面人，但代码规则留了 `allowMaskedManInTreasureCards`。
-- 白痴公开文本目前可按需求在“白痴/白神”之间调整，内部 role id 保持 `idiot`。
+## 测试结果
 
-## 已有功能
+- `node --check` 全部通过 (web/app.js, server.js, functions/api)
+- `balanced-deal.js` 加载通过
+- 本地服务器创建房间/发牌/夜间流程/天亮 API 测试通过
+- 50 局均衡发牌分析通过
 
-- 创建/加入房间、分享链接、选座、补齐测试座位。
-- 四个固定版型：预女猎白混、盗宝大师、机械狼通灵师、假面舞会。
-- 随机发牌、玩家看自己身份、法官看全局身份、复盘。
-- 夜间流程页：按版型生成步骤，记录目标、跳过、盗宝牌选择。
-- 夜间基础规则拦截：守卫不能连续同守；女巫解药/毒药各只能记录一次。
-- 第一天上警、实时退水、警徽投票、PK 后警徽流失。
-- 天亮死亡记录、白天放逐投票、手动放逐记录、警徽移交/撕毁、随时结束游戏。
+## 未完成或已知风险
 
-## API 概览
+- 游戏结果统计与曙光航纪混在同一批改动中（建议拆分提交）
+- 盗宝大师带刀逻辑（三狼全死后才带刀）尚未实现——产品规则已写但代码未改
+- 夜间死亡自动结算仍为最高优先级待完成项
 
-本地和 Cloudflare 保持同一套接口：
+## 下一位禁止修改
 
-- `POST /api/rooms`
-- `GET /api/rooms/:id`
-- `POST /api/rooms/:id/join`
-- `POST /api/rooms/:id/judge-claim`
-- `POST /api/rooms/:id/seat`
-- `POST /api/rooms/:id/fill-test`
-- `POST /api/rooms/:id/deal`
-- `POST /api/rooms/:id/reveal`
-- `POST /api/rooms/:id/night-start`
-- `POST /api/rooms/:id/night-action`
-- `POST /api/rooms/:id/night-finish`
-- `POST /api/rooms/:id/sheriff-candidates`
-- `POST /api/rooms/:id/sheriff-withdraw`
-- `POST /api/rooms/:id/sheriff-vote`
-- `POST /api/rooms/:id/death-record`
-- `POST /api/rooms/:id/day-vote`
-- `POST /api/rooms/:id/exile-record`
-- `POST /api/rooms/:id/sheriff-badge`
-- `POST /api/rooms/:id/game-end`
-
-## 下一步优先级
-
-1. 夜间规则校验继续完善：女巫首夜不可自救、摄梦连续摄死亡、摄梦免刀免毒、同守同救死亡。
-2. 夜间死亡半自动结算：狼刀、救药、毒药、守卫、摄梦、同守同救死亡。
-3. 普通白天投票继续细化：记录发言顺序、PK 先发言顺序、弃票统计展示。
-4. UI 继续压缩按钮高度和页面滚动，重点优化法官页手机单手操作。
-5. Cloudflare 部署后做一次真机多人测试，确认房间同步和身份隐藏没有泄漏。
-
-## 房间有效期
-
-Cloudflare D1 房间按最后一次写入时间保留 12 小时。过期后访问会显示房间不存在；新建房间时会顺带清理过期房间，避免数据库一直累积。
+- `web/app.js` 中风向相关函数 (`applyWind`, `getDrownedSeat`, `isDrownImmune`, `trackCaptainDeath`)
+- `createNightSteps` 中 dawn_voyage 分支
+- `functions/api/rooms/[[path]].js` 中 wind 相关 handler
