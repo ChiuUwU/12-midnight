@@ -5,7 +5,8 @@ const path = require("node:path");
 const {
   calculateNightResolution,
   calculateSuggestedDeaths,
-  getDeathSkillResolution
+  getDeathSkillResolution,
+  getGameOutcome
 } = require("../web/night-resolution");
 
 const port = crypto.randomInt(20000, 40000);
@@ -76,8 +77,9 @@ async function newMechanicalRoom() {
   const judgeToken = created.body.judgeToken;
   const auth = { clientId, judgeToken };
   await post(`/api/rooms/${id}/fill-test`, auth);
-  await post(`/api/rooms/${id}/deal`, auth);
-  await runMechanicalNight(id, clientId, judgeToken, { useAntidote: true });
+  const dealt = await post(`/api/rooms/${id}/deal`, auth);
+  const wolfTarget = dealt.body.room.assignments.find((item) => item.roleId === "villager").seat;
+  await runMechanicalNight(id, clientId, judgeToken, { wolfTarget, useAntidote: true });
   await post(`/api/rooms/${id}/sheriff-candidates`, { ...auth, seats: [1] });
   await post(`/api/rooms/${id}/sheriff-withdraw`, { ...auth, seats: [1] });
   const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] });
@@ -259,4 +261,25 @@ test("death skills enforce poison, last-god and last-wolf restrictions", () => {
     { seat: 2, roleId: "mask", camp: "WOLF", alive: true }
   ];
   assert.match(getDeathSkillResolution(room, { seat: 1, phase: "EXILE" }).reason, /最后一神/);
+});
+
+test("game outcome keeps wolf-following mixed blood on the civilian side", () => {
+  const room = resolutionRoom("pre_witch_hunter_idiot_mixed", [], {
+    assignments: [
+      { seat: 1, roleId: "wolf", camp: "WOLF", alive: true },
+      { seat: 2, roleId: "seer", camp: "GOOD", alive: true },
+      { seat: 3, roleId: "mixed_blood", camp: "FOLLOW", currentCamp: "WOLF", alive: true },
+      { seat: 4, roleId: "villager", camp: "GOOD", alive: false }
+    ]
+  });
+  assert.equal(getGameOutcome(room), null);
+
+  room.assignments[2].alive = false;
+  assert.equal(getGameOutcome(room), "WOLF_WIN");
+
+  room.assignments[0].alive = false;
+  assert.equal(getGameOutcome(room), "WOLF_WIN");
+
+  room.assignments[2].alive = true;
+  assert.equal(getGameOutcome(room), "GOOD_WIN");
 });

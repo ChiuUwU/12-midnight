@@ -240,6 +240,45 @@ test("system witch rules reject first-night self-save and invalid potion reuse",
   }
 });
 
+test("system mode automatically ends after the final wolf is exiled", async () => {
+  const game = await createSystemRoom("automatic-outcome");
+  const wolfSeats = game.views
+    .filter((item) => item.room.assignments[0].camp === "WOLF")
+    .map((item) => item.room.assignments[0].seat);
+  assert.equal(wolfSeats.length, 4);
+
+  for (let index = 0; index < wolfSeats.length; index += 1) {
+    assert.equal((await post(`/api/rooms/${game.id}/night-start`, game.controllerAuth)).status, 200);
+    while (true) {
+      const controllerRoom = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+      if (controllerRoom.systemNight.complete) break;
+      const actor = await findSystemActor(game.id, game.players);
+      assert.ok(actor);
+      let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+      if (actor.step.id === "wolves_kill") payload.skipped = true;
+      else if (actor.step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
+      else if (actor.step.id === "mixed_blood_model") payload.targetSeats = [wolfSeats[0]];
+      else if (actor.step.targetCount > 0) payload.targetSeats = [actor.room.aliveSeats[0]];
+      assert.equal((await post(`/api/rooms/${game.id}/night-action`, payload)).status, 200);
+    }
+    assert.equal((await post(`/api/rooms/${game.id}/night-finish`, game.controllerAuth)).status, 200);
+    assert.equal((await post(`/api/rooms/${game.id}/system-publish-daybreak`, game.controllerAuth)).status, 200);
+    const exiled = await post(`/api/rooms/${game.id}/exile-record`, {
+      ...game.controllerAuth,
+      noExile: false,
+      seat: wolfSeats[index]
+    });
+    assert.equal(exiled.status, 200);
+    if (index < wolfSeats.length - 1) assert.equal(exiled.body.room.phase, "DAY");
+    else {
+      assert.equal(exiled.body.room.phase, "GAME_OVER");
+      assert.equal(exiled.body.room.gameOutcome.result, "GOOD_WIN");
+      assert.equal(exiled.body.room.assignments.length, 12);
+      assert.match(exiled.body.room.latestPublicAnnouncement.text, /好人阵营获胜/);
+    }
+  }
+});
+
 test("all complex boards can complete two system-guided nights", async () => {
   const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage"];
   const expectedSecondNightSteps = {
@@ -284,6 +323,7 @@ test("all complex boards can complete two system-guided nights", async () => {
         const candidates = (step.allowedSeats?.length ? step.allowedSeats : actor.room.aliveSeats).filter(Boolean);
         let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
         if (step.id === "wolves_kill") payload.skipped = true;
+        else if (["poisoner_poison", "mechanical_poison", "mechanical_kill"].includes(step.id)) payload.skipped = true;
         else if (step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
         else if (step.id === "siren_wind") payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false, windDirection: nightNumber === 1 ? "calm" : "tailwind" };
         else if (step.id === "treasure_pick") {

@@ -172,6 +172,20 @@
     "spirit_medium", "poisoner", "dreamer", "magician", "order_prince",
     "captain", "masked_man"
   ]);
+  const CIVILIAN_ROLE_IDS = new Set(["villager", "mixed_blood"]);
+
+  function getGameOutcome(room) {
+    const assignments = room.assignments || [];
+    if (!assignments.length) return null;
+    const alive = assignments.filter((item) => item.alive !== false);
+    const wolvesAlive = alive.some((item) => item.roleId !== "mixed_blood" && (item.currentCamp || item.camp) === "WOLF");
+    const godsAlive = alive.some((item) => GOD_ROLE_IDS.has(item.roleId));
+    const civiliansAlive = alive.some((item) => CIVILIAN_ROLE_IDS.has(item.roleId));
+    const wolfGoalReached = !godsAlive || !civiliansAlive;
+    if (wolfGoalReached) return "WOLF_WIN";
+    if (!wolvesAlive) return "GOOD_WIN";
+    return null;
+  }
 
   function actionRoleAtTarget(room, action) {
     const seat = Number(action?.targetSeats?.[0] || 0);
@@ -217,5 +231,5 @@
     return { seat, skillRoleId, eligible: true, reason: "可以发动死亡技能", day };
   }
 
-  return { calculateNightResolution, calculateSuggestedDeaths, getDeathSkillResolution };
+  return { calculateNightResolution, calculateSuggestedDeaths, getDeathSkillResolution, getGameOutcome };
 });

@@ -2,7 +2,7 @@ import balancedDeal from "../../../web/balanced-deal.js";
 import nightResolution from "../../../web/night-resolution.js";
 
 const { createBalancedDeal } = balancedDeal;
-const { calculateNightResolution, getDeathSkillResolution } = nightResolution;
+const { calculateNightResolution, getDeathSkillResolution, getGameOutcome } = nightResolution;
 
 const DEFAULT_RULES = {
   winCondition: "KILL_SIDE",
@@ -701,6 +701,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     myDelayedDeath: room.mode === "SYSTEM" ? myDelayedDeath : null,
     myDeathSkill: room.mode === "SYSTEM" ? myDeathSkill : null,
     latestPublicAnnouncement: (room.publicAnnouncements || []).at(-1) || null,
+    gameOutcome: room.phase === "GAME_OVER" ? room.gameOutcome || null : null,
     mySeat: mySeat ? { ...mySeat, userId: mySeat.clientId } : null,
     assignments: judge || revealAll ? room.assignments : myAssignment ? [myAssignment] : [],
     nightActions: judge || revealAll ? room.nightActions : [],
@@ -764,6 +765,20 @@ function queueDeathSkills(room, seats, phase, reasonsBySeat = {}) {
     }
     writeLog(room, resolution.eligible ? "DEATH_SKILL_PENDING" : "DEATH_SKILL_BLOCKED", record);
   });
+}
+
+function maybeCompleteSystemGame(room) {
+  if (room.mode !== "SYSTEM" || room.phase === "GAME_OVER" || room.pendingNightResolution) return null;
+  if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return null;
+  if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return null;
+  const result = getGameOutcome(room);
+  if (!result) return null;
+  room.phase = "GAME_OVER";
+  room.gameOutcome = { result, day: room.night, automatic: true, createdAt: Date.now() };
+  writeLog(room, "GAME_AUTO_COMPLETED", room.gameOutcome);
+  const text = result === "GOOD_WIN" ? "游戏结束，好人阵营获胜。" : "游戏结束，狼人阵营获胜。";
+  addPublicAnnouncement(room, text);
+  return room.gameOutcome;
 }
 
 function parseRoute(url) {
@@ -1167,6 +1182,7 @@ async function handleRoomAction(request, env, route) {
     writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
     const announcement = seats.length ? `天亮了，昨夜${seats.map((seat) => `${seat}号`).join("、")}死亡。` : "天亮了，昨夜是平安夜。";
     addPublicAnnouncement(room, announcement);
+    maybeCompleteSystemGame(room);
     await saveRoom(env, room);
     return json({ room: sanitizeRoom(room, { clientId, judgeToken }), announcement });
   } else if (route.action === "sheriff-candidates") {
@@ -1299,6 +1315,7 @@ async function handleRoomAction(request, env, route) {
     room.deathRecords.push(record);
     writeLog(room, "DELAYED_DEATH_CONFIRMED", record);
     if (room.mode === "SYSTEM") addPublicAnnouncement(room, `${seat}号玩家死亡。`);
+    maybeCompleteSystemGame(room);
   } else if (route.action === "death-skill") {
     const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
     if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && ownSeat === Number(body.seat || 0))) return error(403, "只有本人可以处理死亡技能");
@@ -1319,6 +1336,7 @@ async function handleRoomAction(request, env, route) {
     if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, resolvedAt: Date.now() });
     writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat });
     if (room.mode === "SYSTEM" && targetSeat) addPublicAnnouncement(room, `${seat}号玩家发动技能，${targetSeat}号玩家死亡。`);
+    maybeCompleteSystemGame(room);
   } else if (route.action === "day-vote") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录放逐投票");
     if (room.phase !== "DAY") return error(400, "当前阶段不能记录放逐投票");
@@ -1380,6 +1398,7 @@ async function handleRoomAction(request, env, route) {
       const revealText = assignment?.roleId === "idiot" ? `，身份为白痴` : "";
       addPublicAnnouncement(room, noExile ? "白天无人出局。" : `${seat}号玩家被放逐出局${revealText}。`);
     }
+    maybeCompleteSystemGame(room);
   } else if (route.action === "sheriff-badge") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以处理警徽");
     const mode = body.mode;

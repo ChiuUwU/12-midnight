@@ -1545,6 +1545,11 @@
     const isController = Boolean(room.isController);
     const canControl = isJudge || (room.mode === "SYSTEM" && isController);
     const gameOver = room.phase === "GAME_OVER";
+    const gameOutcomeText = room.gameOutcome?.result === "GOOD_WIN"
+      ? "好人阵营获胜"
+      : room.gameOutcome?.result === "WOLF_WIN"
+        ? "狼人阵营获胜"
+        : "游戏已结束";
     const canDeal = canControl && room.phase === "WAITING" && occupiedCount === board.playerCount;
     const shareUrl = IS_REMOTE ? `${location.origin}${location.pathname}?room=${room.id}` : "";
     const latestDeaths = latestRecord(room.deathRecords);
@@ -1660,7 +1665,7 @@
         <div class="notice">投票状态：${dayVote ? dayVote.exiledSeat ? `${dayVote.exiledSeat}号出局` : dayVote.noExile ? "无人出局" : dayVote.pkSeats && dayVote.pkSeats.length ? `${formatSeatList(dayVote.pkSeats)} 平票 PK` : "未产生结果" : "暂未投票"}</div>
         ${publicReveals.length ? `<div class="notice">公开身份：${publicReveals.map((item) => `${item.seat}号白痴`).join("、")}</div>` : ""}
       </section>
-      ${gameOver ? '<section class="panel"><div class="value">游戏已结束</div><div class="notice">可以进入复盘查看身份和操作记录。</div></section>' : ""}
+      ${gameOver ? `<section class="panel"><div class="value">${gameOutcomeText}</div><div class="notice">可以进入复盘查看身份和操作记录。</div></section>` : ""}
       <section class="seat-grid">
         ${room.seats.map((seat) => {
           const className = seat.userId === state.currentUserId ? "mine" : seat.occupied ? "taken" : "";
@@ -2390,8 +2395,13 @@
     if (action === "system-publish-daybreak" && room) {
       try {
         const data = await remotePost("system-publish-daybreak");
-        if (data.room.latestPublicAnnouncement?.id) state.heardAnnouncementIds[room.id] = data.room.latestPublicAnnouncement.id;
-        speakSystemAnnouncement(data.announcement || "天亮了。");
+        const latest = data.room.latestPublicAnnouncement;
+        if (latest?.id) state.heardAnnouncementIds[room.id] = latest.id;
+        const deathAnnouncement = data.announcement || "天亮了。";
+        const speech = latest?.text && latest.text !== deathAnnouncement
+          ? `${deathAnnouncement}${latest.text}`
+          : deathAnnouncement;
+        speakSystemAnnouncement(speech);
         saveState();
         render();
       } catch (error) {

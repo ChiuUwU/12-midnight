@@ -5,7 +5,7 @@ const crypto = require("crypto");
 const os = require("os");
 const { dealBoard } = require("./miniprogram/utils/deal");
 const { createBalancedDeal } = require("./web/balanced-deal");
-const { calculateNightResolution, getDeathSkillResolution } = require("./web/night-resolution");
+const { calculateNightResolution, getDeathSkillResolution, getGameOutcome } = require("./web/night-resolution");
 
 const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || "0.0.0.0";
@@ -438,6 +438,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     myDelayedDeath: room.mode === "SYSTEM" ? myDelayedDeath : null,
     myDeathSkill: room.mode === "SYSTEM" ? myDeathSkill : null,
     latestPublicAnnouncement: (room.publicAnnouncements || []).at(-1) || null,
+    gameOutcome: room.phase === "GAME_OVER" ? room.gameOutcome || null : null,
     mySeat: mySeat ? { ...mySeat, userId: mySeat.clientId } : null,
     assignments: judge || revealAll ? room.assignments : myAssignment ? [myAssignment] : [],
     nightActions: judge || revealAll ? room.nightActions : [],
@@ -501,6 +502,20 @@ function queueDeathSkills(room, seats, phase, reasonsBySeat = {}) {
     }
     writeLog(room, resolution.eligible ? "DEATH_SKILL_PENDING" : "DEATH_SKILL_BLOCKED", record);
   });
+}
+
+function maybeCompleteSystemGame(room) {
+  if (room.mode !== "SYSTEM" || room.phase === "GAME_OVER" || room.pendingNightResolution) return null;
+  if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return null;
+  if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return null;
+  const result = getGameOutcome(room);
+  if (!result) return null;
+  room.phase = "GAME_OVER";
+  room.gameOutcome = { result, day: room.night, automatic: true, createdAt: Date.now() };
+  writeLog(room, "GAME_AUTO_COMPLETED", room.gameOutcome);
+  const text = result === "GOOD_WIN" ? "游戏结束，好人阵营获胜。" : "游戏结束，狼人阵营获胜。";
+  addPublicAnnouncement(room, text);
+  return room.gameOutcome;
 }
 
 function getAliveSeats(room) {
@@ -967,6 +982,7 @@ async function handleApi(request, response, url) {
     room.deathRecords.push(record);
     writeLog(room, "DELAYED_DEATH_CONFIRMED", record);
     if (room.mode === "SYSTEM") addPublicAnnouncement(room, `${seat}号玩家死亡。`);
+    maybeCompleteSystemGame(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
@@ -992,6 +1008,7 @@ async function handleApi(request, response, url) {
     if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, resolvedAt: Date.now() });
     writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat });
     if (room.mode === "SYSTEM" && targetSeat) addPublicAnnouncement(room, `${seat}号玩家发动技能，${targetSeat}号玩家死亡。`);
+    maybeCompleteSystemGame(room);
     return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
 
@@ -1047,6 +1064,7 @@ async function handleApi(request, response, url) {
       const revealText = assignment?.roleId === "idiot" ? `，身份为白痴` : "";
       addPublicAnnouncement(room, noExile ? "白天无人出局。" : `${seat}号玩家被放逐出局${revealText}。`);
     }
+    maybeCompleteSystemGame(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
@@ -1270,6 +1288,7 @@ async function handleApi(request, response, url) {
     writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
     const announcement = seats.length ? `天亮了，昨夜${seats.map((seat) => `${seat}号`).join("、")}死亡。` : "天亮了，昨夜是平安夜。";
     addPublicAnnouncement(room, announcement);
+    maybeCompleteSystemGame(room);
     return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }), announcement });
   }
 
