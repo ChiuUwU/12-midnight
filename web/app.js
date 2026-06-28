@@ -3,7 +3,7 @@
   const STORAGE_KEY = "twelve_midnight_web_state_v1";
   const app = document.querySelector("#app");
   const IS_REMOTE = location.protocol === "http:" || location.protocol === "https:";
-  const AUTO_REFRESH_VIEWS = ["room", "identity", "judge", "review"];
+  const AUTO_REFRESH_VIEWS = ["room", "identity", "judge", "review", "night"];
   const PRELOAD_IMAGES = ["assets/app-icon.png"];
 
   const RANDOM_POOL = new Uint32Array(4096);
@@ -315,7 +315,9 @@
   }
 
   function currentTreasureCard(room, night = room && room.night) {
-    return (room && room.nightActions || []).find((item) => item.night === night && item.stepId === "treasure_pick" && !item.skipped)?.cardRoleId || "";
+    return room?.systemNight?.privateContext?.treasureCardRoleId
+      || (room && room.nightActions || []).find((item) => item.night === night && item.stepId === "treasure_pick" && !item.skipped)?.cardRoleId
+      || "";
   }
 
   function mechanicalSkillStep(room, night) {
@@ -456,6 +458,16 @@
   }
 
   let state = loadState();
+  let lastSystemAnnouncementKey = "";
+
+  function speakSystemAnnouncement(text) {
+    if (!text || !("speechSynthesis" in window)) return;
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "zh-CN";
+    utterance.rate = 0.9;
+    window.speechSynthesis.speak(utterance);
+  }
 
   function createInitialState() {
     return {
@@ -468,6 +480,7 @@
       judgeTokens: {},
       deathDraftSeats: [],
       deathDraftReasons: {},
+      heardAnnouncementIds: {},
       rooms: {}
     };
   }
@@ -484,6 +497,7 @@
         balanceProfileId: saved.balanceProfileId || initial.balanceProfileId,
         dealHistory: Array.isArray(saved.dealHistory) ? saved.dealHistory.slice(-10) : [],
         deathDraftSeats: saved.deathDraftSeats || [],
+        heardAnnouncementIds: saved.heardAnnouncementIds || {},
         remoteRoom: null
       };
       const urlRoom = new URLSearchParams(location.search).get("room");
@@ -795,7 +809,8 @@
   }
 
   function getWitchAntidoteTarget(room) {
-    return getNightActionTarget(room, "wolves_kill", room.night);
+    return Number(room?.systemNight?.privateContext?.wolfVictimSeat || 0)
+      || getNightActionTarget(room, "wolves_kill", room.night);
   }
 
   function formatNightAction(action) {
@@ -836,7 +851,9 @@
       if (activeCard === "wolf" && !skipped && (room.assignments || []).some((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId))) return "仍有狼人同伴存活，盗宝狼人不能发动击杀";
     }
     if (skipped) return "";
-    if (targetSeats.some((seat) => !(room.assignments || []).some((assignment) => assignment.seat === seat && assignment.alive !== false))) {
+    if (targetSeats.some((seat) => Array.isArray(room.aliveSeats)
+      ? !room.aliveSeats.includes(seat)
+      : !(room.assignments || []).some((assignment) => assignment.seat === seat && assignment.alive !== false))) {
       return "夜间技能只能选择存活玩家";
     }
     if (["mask_check", "mask_give"].includes(step.id)) {
@@ -863,6 +880,14 @@
 
   function getRole(roleId) {
     return ROLES[roleId];
+  }
+
+  function formatPrivateNightResult(result) {
+    if (!result) return "";
+    if (result.kind === "CAMP") return `${result.seat}号查验结果：${result.value === "WOLF" ? "狼人" : "好人"}`;
+    if (result.kind === "ROLE") return `${result.seat}号具体身份：${getRole(result.roleId)?.name || result.roleId}`;
+    if (result.kind === "DANCE") return `${result.seat}号${result.value ? "在" : "不在"}今晚舞池中`;
+    return "";
   }
 
   function writeLog(room, type, payload) {
@@ -1517,8 +1542,10 @@
     const mySeat = room.seats.find((seat) => seat.userId === state.currentUserId);
     const occupiedCount = room.seats.filter((seat) => seat.occupied).length;
     const isJudge = !IS_REMOTE || room.isJudge;
+    const isController = Boolean(room.isController);
+    const canControl = isJudge || (room.mode === "SYSTEM" && isController);
     const gameOver = room.phase === "GAME_OVER";
-    const canDeal = isJudge && room.phase === "WAITING" && occupiedCount === board.playerCount;
+    const canDeal = canControl && room.phase === "WAITING" && occupiedCount === board.playerCount;
     const shareUrl = IS_REMOTE ? `${location.origin}${location.pathname}?room=${room.id}` : "";
     const latestDeaths = latestRecord(room.deathRecords);
     const latestExile = latestRecord(room.exileRecords);
@@ -1533,15 +1560,15 @@
     const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && !daybreakRecorded;
     const canRunDayActions = room.phase === "DAY" && isJudge;
     const pendingExileResult = room.pendingExileResult || null;
-    const pendingDelayedDeaths = (room.pendingDelayedDeaths || []).filter((item) => item.day === room.night);
-    const pendingDeathSkills = (room.pendingDeathSkills || []).filter((item) => item.day === room.night);
+    const pendingDelayedDeaths = room.myDelayedDeath ? [room.myDelayedDeath] : (room.pendingDelayedDeaths || []).filter((item) => item.day === room.night);
+    const pendingDeathSkills = room.myDeathSkill ? [room.myDeathSkill] : (room.pendingDeathSkills || []).filter((item) => item.day === room.night);
     const publicReveals = IS_REMOTE ? room.publicReveals || [] : (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot");
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
     const judgeNextStep = getJudgeNextStep(room);
     const mainActions = [
       room.phase === "WAITING" ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : "",
-      room.phase === "DEALT" && isJudge ? '<button class="button primary" data-action="start-night">开始第一夜</button>' : "",
+      room.phase === "DEALT" && canControl ? '<button class="button primary" data-action="start-night">开始第一夜</button>' : "",
       room.phase === "DAY" && room.night === 1 && isJudge ? '<button class="button" data-action="view" data-view="sheriff">记录上警</button>' : "",
       room.phase === "DAY" && room.night === 1 && isJudge && sheriffCandidates.length ? '<button class="button" data-action="view" data-view="withdraw">记录退水</button>' : "",
       canSelfWithdraw ? '<button class="button" data-action="self-withdraw">我要退水</button>' : "",
@@ -1549,24 +1576,28 @@
       !gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : "",
       canRecordDaybreakDeaths ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
       canRecordDaybreakDeaths && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
+      room.mode === "SYSTEM" && isController && room.systemDaybreakReady ? '<button class="button primary" data-action="system-publish-daybreak">公布昨夜死讯</button>' : "",
       ...pendingDelayedDeaths.map((item) => `<button class="button danger" data-action="confirm-delayed-death" data-seat="${item.seat}">确认 ${item.seat}号发言结束死亡</button>`),
-      ...pendingDeathSkills.map((item) => `<div class="death-skill-action"><div class="notice">${item.seat}号可以发动死亡技能</div><select class="input" id="deathSkillTarget-${item.seat}"><option value="0">选择开枪目标</option>${(room.assignments || []).filter((assignment) => assignment.alive !== false && assignment.seat !== item.seat).map((assignment) => `<option value="${assignment.seat}">${assignment.seat}号</option>`).join("")}</select><button class="button danger" data-action="death-skill-submit" data-seat="${item.seat}">确认开枪</button><button class="button" data-action="death-skill-skip" data-seat="${item.seat}">不开枪</button></div>`),
+      ...pendingDeathSkills.map((item) => `<div class="death-skill-action"><div class="notice">${item.seat}号可以发动死亡技能</div><select class="input" id="deathSkillTarget-${item.seat}"><option value="0">选择开枪目标</option>${room.seats.filter((seat) => (room.aliveSeats || []).includes(seat.seat) && seat.seat !== item.seat).map((seat) => `<option value="${seat.seat}">${seat.seat}号</option>`).join("")}</select><button class="button danger" data-action="death-skill-submit" data-seat="${item.seat}">确认开枪</button><button class="button" data-action="death-skill-skip" data-seat="${item.seat}">不开枪</button></div>`),
       canRunDayActions && pendingExileResult ? '<button class="button" data-action="view" data-view="orderPrince">处理投票结果</button>' : "",
       canRunDayActions && !pendingExileResult ? `<button class="button" data-action="view" data-view="dayVote">${room.orderPrinceRevotePending ? "记录回溯重投" : "记录放逐投票"}</button>` : "",
       canRunDayActions && !pendingExileResult ? '<button class="button primary" data-action="view" data-view="exile">手动记录放逐</button>' : "",
+      room.mode === "SYSTEM" && isController && room.phase === "DAY" && !room.systemDaybreakReady ? '<button class="button" data-action="view" data-view="exile">记录白天出局</button>' : "",
       canRunDayActions && !pendingExileResult && !room.orderPrinceRevotePending && !room.pendingNightResolution && !pendingDelayedDeaths.length && !pendingDeathSkills.length ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
-      room.phase === "NIGHT" && isJudge ? '<button class="button" data-action="view" data-view="night">继续夜间流程</button>' : "",
-      room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
+      room.mode === "SYSTEM" && isController && room.phase === "DAY" && room.systemDayOutcomeRecorded && !room.systemDaybreakReady && !(room.systemPendingTasks?.delayedDeaths || room.systemPendingTasks?.deathSkills) ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
+      room.phase === "NIGHT" && (canControl || room.systemNight?.canAct) ? `<button class="button ${room.systemNight?.canAct ? "primary" : ""}" data-action="view" data-view="night">${room.systemNight?.canAct ? "轮到我行动" : "进入夜间播报"}</button>` : "",
+      room.phase === "WAITING" && canControl ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
     const infoActions = [
-      room.phase !== "WAITING" ? '<button class="button primary" data-action="view" data-view="identity">查看我的身份</button>' : "",
+      room.phase !== "WAITING" && !canControl ? '<button class="button primary" data-action="view" data-view="identity">查看我的身份</button>' : "",
       (room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="judge">法官总览</button>' : "",
       (room.phase === "DEALT" || room.phase === "DAY" || room.phase === "NIGHT" || gameOver) && isJudge ? '<button class="button" data-action="view" data-view="review">复盘</button>' : "",
+      gameOver && room.mode === "SYSTEM" && isController ? '<button class="button" data-action="view" data-view="review">复盘</button>' : "",
       '<button class="button" data-action="view" data-view="randomizer">随机发言顺序</button>',
       IS_REMOTE ? '<button class="button" data-action="refresh-room">刷新房间</button>' : ""
     ];
     const dangerActions = [
-      !gameOver && room.phase !== "WAITING" && isJudge ? '<button class="button danger" data-action="game-end">结束游戏</button>' : "",
+      !gameOver && room.phase !== "WAITING" && canControl ? '<button class="button danger" data-action="game-end">结束游戏</button>' : "",
       `<button class="button danger" data-action="reset">${IS_REMOTE ? "退出当前房间" : "重置本地数据"}</button>`
     ];
 
@@ -1586,7 +1617,7 @@
           <div class="notice">其他设备输入这个口令，可以进入法官席。</div>
         </section>
       ` : ""}
-      ${IS_REMOTE && !isJudge ? `
+      ${IS_REMOTE && room.mode === "JUDGE" && !isJudge ? `
         <section class="panel">
           <div class="label">进入法官席</div>
           <input class="input" id="judgeCodeInput" inputmode="numeric" maxlength="4" placeholder="输入 4 位法官口令" />
@@ -1595,10 +1626,10 @@
       ` : ""}
       <section class="panel">
         <div class="row">
-          <div><div class="label">${isJudge && IS_REMOTE ? "当前身份" : "当前座位"}</div><div class="value">${isJudge && IS_REMOTE ? "法官席" : mySeat ? `${mySeat.seat}号` : "未选择"}</div></div>
+          <div><div class="label">${canControl && IS_REMOTE ? "当前身份" : "当前座位"}</div><div class="value">${canControl && IS_REMOTE ? room.mode === "SYSTEM" ? "公共控制设备" : "法官席" : mySeat ? `${mySeat.seat}号` : "未选择"}</div></div>
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
-        <div class="notice">${isJudge ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
+        <div class="notice">${canControl ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
         ${room.boardId === "dawn_voyage" && room.phase === "DAY" && (isJudge ? room.captainAliveAtDawn && room.windDirection : room.announcedWindDirection) ? (() => {
           const windName = { calm: "无风", tailwind: "顺风", headwind: "逆风" };
           const announcedWind = isJudge ? room.windDirection : room.announcedWindDirection;
@@ -1607,7 +1638,7 @@
           const label = "昨夜" + windName[announcedWind] + (isJudge && captainDiedThisNight ? "（法官宣布）" : "");
           return label ? '<div class="notice" style="color:var(--accent);font-weight:600;">' + label + '</div>' : "";
         })() : ""}
-        <div class="notice">${isJudge ? `下一步：${judgeNextStep.title}。${judgeNextStep.detail}` : getPlayerPhaseText(room, mySeat)}</div>
+        <div class="notice">${canControl ? `下一步：${judgeNextStep.title}。${judgeNextStep.detail}` : getPlayerPhaseText(room, mySeat)}</div>
       </section>
       <section class="panel">
         <div class="label">上警玩家</div>
@@ -1633,7 +1664,7 @@
       <section class="seat-grid">
         ${room.seats.map((seat) => {
           const className = seat.userId === state.currentUserId ? "mine" : seat.occupied ? "taken" : "";
-          return `<button class="seat ${className}" data-action="choose-seat" data-seat="${seat.seat}" ${isJudge && IS_REMOTE ? "disabled" : ""}>${seat.seat}号</button>`;
+          return `<button class="seat ${className}" data-action="choose-seat" data-seat="${seat.seat}" ${canControl && IS_REMOTE ? "disabled" : ""}>${seat.seat}号</button>`;
         }).join("")}
       </section>
       ${renderActionPanel("当前操作", mainActions)}
@@ -1641,6 +1672,11 @@
       ${renderActionPanel("系统操作", dangerActions, "danger-zone")}
       <div class="notice">${IS_REMOTE ? "联机版会使用当前网址的后端同步房间。localhost 是本机服务，Cloudflare Pages 是线上服务。" : "静态版数据只保存在当前浏览器。真正跨手机加入房间需要后端同步。"}</div>
     `;
+    if (room.mode === "SYSTEM" && isController && room.latestPublicAnnouncement && room.latestPublicAnnouncement.id !== state.heardAnnouncementIds[room.id]) {
+      state.heardAnnouncementIds[room.id] = room.latestPublicAnnouncement.id;
+      saveState();
+      setTimeout(() => speakSystemAnnouncement(room.latestPublicAnnouncement.text), 100);
+    }
   }
 
   function renderIdentity() {
@@ -1692,10 +1728,34 @@
     const room = getCurrentRoom();
     if (!room) return setView("home");
     const isJudge = !IS_REMOTE || room.isJudge;
-    if (!isJudge) {
+    const systemNight = room.mode === "SYSTEM" ? room.systemNight : null;
+    if (systemNight?.canControl) {
+      const announcementText = systemNight.complete
+        ? "所有夜间身份均已行动，请等待天亮。"
+        : getJudgeScript({ id: systemNight.stepId, label: systemNight.announcement });
+      const announcementKey = `${room.id}-${room.night}-${systemNight.stepIndex}-${systemNight.complete}`;
       app.innerHTML = `
-        ${pageHeader("夜间流程", "等待法官操作")}
-        <section class="panel"><div class="body-text">当前为夜间阶段，请按线下流程闭眼等待。</div></section>
+        ${pageHeader(`第 ${room.night || 1} 夜`, systemNight.complete ? "夜间行动已完成" : "公共语音播报中")}
+        <section class="panel">
+          <div class="label">公共设备</div>
+          <div class="value">${systemNight.complete ? "等待进入天亮" : "请保持全员闭眼"}</div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${systemNight.stepCount ? Math.round((systemNight.stepIndex / systemNight.stepCount) * 100) : 100}%"></div></div>
+          <div class="notice">进度 ${Math.min(systemNight.stepIndex + (systemNight.complete ? 0 : 1), systemNight.stepCount)} / ${systemNight.stepCount}</div>
+        </section>
+        ${systemNight.complete ? '<button class="button primary" data-action="night-finish">结算并天亮</button>' : '<button class="button" data-action="system-speak" data-text="' + escapeHtml(announcementText) + '">重播当前台词</button>'}
+        ${systemNight.stepIndex > 0 ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
+        <button class="button" data-action="view" data-view="room">返回房间</button>
+      `;
+      if (announcementKey !== lastSystemAnnouncementKey) {
+        lastSystemAnnouncementKey = announcementKey;
+        setTimeout(() => speakSystemAnnouncement(announcementText), 100);
+      }
+      return;
+    }
+    if (!isJudge && !systemNight?.canAct) {
+      app.innerHTML = `
+        ${pageHeader("夜间流程", "等待轮到你的身份")}
+        <section class="panel"><div class="body-text">请闭眼等待。轮到你的身份时，本页会自动出现私密操作。</div></section>
         <button class="button" data-action="view" data-view="room">返回房间</button>
       `;
       return;
@@ -1711,12 +1771,12 @@
       : [];
     const activeTreasureRoleId = currentTreasureCard(room);
     const activeTreasureRole = activeTreasureRoleId ? getRole(activeTreasureRoleId) : null;
-    const treasurePoisonUsed = (room.nightActions || []).some((action) => action.stepId === "treasure_skill" && action.cardRoleId === "poisoner" && !action.skipped);
-    const treasureWolfEligible = !(room.assignments || []).some((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId));
+    const treasurePoisonUsed = systemNight?.privateContext?.treasurePoisonUsed ?? (room.nightActions || []).some((action) => action.stepId === "treasure_skill" && action.cardRoleId === "poisoner" && !action.skipped);
+    const treasureWolfEligible = systemNight?.privateContext?.treasureWolfEligible ?? !(room.assignments || []).some((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId));
     const treasureSkillCanTarget = !activeTreasureRoleId || ["spirit_medium", "dreamer"].includes(activeTreasureRoleId) || (activeTreasureRoleId === "poisoner" && !treasurePoisonUsed) || (activeTreasureRoleId === "wolf" && treasureWolfEligible);
     const treasureSkillRequired = ["spirit_medium", "dreamer"].includes(activeTreasureRoleId);
     const currentNightActions = (room.nightActions || []).filter((action) => action.night === room.night);
-    const suggestedDeaths = calculateSuggestedDeaths(room, room.night);
+    const suggestedDeaths = isJudge ? calculateSuggestedDeaths(room, room.night) : [];
     const witchAntidoteTarget = step && ["witch_action", "witch_antidote"].includes(step.id) ? getWitchAntidoteTarget(room) : 0;
     const nightSubmitLabel = step && step.id === "witch_antidote" ? "救" : step && step.id === "witch_poison" ? "使用毒药" : "确认记录";
     const nightSkipLabel = step && step.id === "witch_antidote" ? "不救" : step && step.id === "witch_poison" ? "不使用毒药" : "空过";
@@ -1798,7 +1858,7 @@
           <div class="label">${step.targetCount === 1 ? "选择目标" : `选择 ${step.targetCount} 个目标`}</div>
           <section class="seat-grid">
             ${room.seats.map((seat) => {
-              const alive = (room.assignments || []).some((assignment) => assignment.seat === seat.seat && assignment.alive !== false);
+              const alive = Array.isArray(room.aliveSeats) ? room.aliveSeats.includes(seat.seat) : (room.assignments || []).some((assignment) => assignment.seat === seat.seat && assignment.alive !== false);
               const allowed = alive && (!Array.isArray(step.allowedSeats) || step.allowedSeats.includes(seat.seat)) && (step.id !== "treasure_skill" || treasureSkillCanTarget);
               return `<button class="seat ${allowed ? "" : "unavailable"}" data-action="night-seat" data-seat="${seat.seat}" ${allowed ? "" : "disabled"}>${seat.seat}号</button>`;
             }).join("")}
@@ -1807,7 +1867,7 @@
           ${["trickster_swap", "magician_swap"].includes(step.id) ? `<div class="notice">每个号码整局只能被该角色交换一次；当前可选：${formatSeatList(step.allowedSeats || [])}</div>` : ""}
           ${step.id === "treasure_skill" ? `<div class="notice">当前盗宝牌：${activeTreasureRole ? activeTreasureRole.name : "未选择"}${treasureSkillCanTarget ? "" : "，本夜没有可发动的主动技能，请选择不发动"}</div>` : ""}
         </section>
-        ${getNightResultHtml(room, step, [])}
+        ${isJudge ? getNightResultHtml(room, step, []) : ""}
       `}
 
       <section class="panel">
@@ -1972,9 +2032,10 @@
     const room = getCurrentRoom();
     if (!room) return setView("home");
     const isJudge = !IS_REMOTE || room.isJudge;
-    if (!isJudge) return setView("room");
+    const canControl = isJudge || (room.mode === "SYSTEM" && room.isController);
+    if (!canControl) return setView("room");
     app.innerHTML = `
-      ${pageHeader("记录白天放逐", "选择被放逐玩家，或记录无人出局")}
+      ${pageHeader("记录白天出局", "线下投票完成后，只记录最终出局结果")}
       <section class="seat-grid">
         ${room.seats.map((seat) => `<button class="seat" data-action="exile-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
       </section>
@@ -2124,7 +2185,8 @@
     const room = getCurrentRoom();
     if (!room) return setView("home");
     const isJudge = !IS_REMOTE || room.isJudge;
-    if (!isJudge) {
+    const canControl = isJudge || (room.mode === "SYSTEM" && room.isController);
+    if (!canControl) {
       app.innerHTML = `
         ${pageHeader("游戏结束", "等待法官确认结果")}
         <button class="button" data-action="view" data-view="room">返回房间</button>
@@ -2280,6 +2342,11 @@
       return;
     }
 
+    if (action === "system-speak") {
+      speakSystemAnnouncement(target.dataset.text || "");
+      return;
+    }
+
     if (action === "self-withdraw" && room) {
       try {
         if (IS_REMOTE) {
@@ -2317,6 +2384,19 @@
       state.view = "death";
       saveState();
       render();
+      return;
+    }
+
+    if (action === "system-publish-daybreak" && room) {
+      try {
+        const data = await remotePost("system-publish-daybreak");
+        if (data.room.latestPublicAnnouncement?.id) state.heardAnnouncementIds[room.id] = data.room.latestPublicAnnouncement.id;
+        speakSystemAnnouncement(data.announcement || "天亮了。");
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
       return;
     }
 
@@ -2538,11 +2618,13 @@
 
       try {
         if (IS_REMOTE) {
-          await remotePost("night-action", {
+          const data = await remotePost("night-action", {
             skipped,
             targetSeats,
             cardRoleId
           });
+          const resultText = formatPrivateNightResult(data.privateResult);
+          if (resultText) window.alert(resultText);
           render();
           return;
         }
@@ -3058,8 +3140,8 @@
     }
 
     if (action === "choose-seat" && room) {
-      if (IS_REMOTE && room.isJudge) {
-        window.alert("法官不占 1-12 号座位");
+      if (IS_REMOTE && (room.isJudge || room.isController)) {
+        window.alert(room.mode === "SYSTEM" ? "公共控制设备不占玩家座位" : "法官不占 1-12 号座位");
         return;
       }
       if (room.phase !== "WAITING") {
@@ -3184,6 +3266,7 @@
   if (IS_REMOTE) {
     setInterval(() => {
       if (!state.currentRoomId || !AUTO_REFRESH_VIEWS.includes(state.view)) return;
+      if (state.view === "night" && state.remoteRoom?.systemNight?.canAct) return;
       refreshRemoteRoom()
         .then(render)
         .catch(() => {});
