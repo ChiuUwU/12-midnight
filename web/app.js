@@ -1816,7 +1816,7 @@
             <div class="label">解药</div>
             <div class="value">今晚被击杀：${witchAntidoteTarget ? `${witchAntidoteTarget}号` : "无人"}</div>
             <div class="segmented witch-choice-row">
-              <button class="segment" data-action="witch-antidote-choice" data-use="true" ${witchAntidoteTarget ? "" : "disabled"}>救</button>
+              <button class="segment" data-action="witch-antidote-choice" data-use="true" ${witchAntidoteTarget && !(room.night === 1 && room.assignments.some((item) => item.roleId === "witch" && item.seat === witchAntidoteTarget)) ? "" : "disabled"}>救</button>
               <button class="segment" data-action="witch-antidote-choice" data-use="false">不救</button>
             </div>
           </section>
@@ -1825,7 +1825,7 @@
           <section class="panel">
             <div class="label">毒药号码</div>
             <section class="seat-grid">
-              ${room.seats.map((seat) => `<button class="seat" data-action="witch-poison-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
+              ${room.seats.map((seat) => `<button class="seat" data-action="witch-poison-seat" data-seat="${seat.seat}" ${Array.isArray(room.aliveSeats) ? room.aliveSeats.includes(seat.seat) ? "" : "disabled" : room.assignments.some((item) => item.seat === seat.seat && item.alive !== false) ? "" : "disabled"}>${seat.seat}号</button>`).join("")}
             </section>
           </section>
         ` : ""}
@@ -2485,11 +2485,23 @@
         window.alert("今晚无人被击杀，不能使用解药");
         return;
       }
+      const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
+      if (antidoteUsed && room.night === 1 && antidoteTargetSeat === witchSeat) {
+        window.alert("女巫首夜不能自救");
+        return;
+      }
       const usePoison = target.dataset.usePoison === "true";
       const poisonSeatButton = app.querySelector("[data-action='witch-poison-seat'].selected");
       const poisonTargetSeat = usePoison && poisonSeatButton ? Number(poisonSeatButton.dataset.seat) : 0;
       if (usePoison && !poisonTargetSeat) {
         window.alert("请先选择毒药号码");
+        return;
+      }
+      const poisonTargetAlive = Array.isArray(room.aliveSeats)
+        ? room.aliveSeats.includes(poisonTargetSeat)
+        : (room.assignments || []).some((item) => item.seat === poisonTargetSeat && item.alive !== false);
+      if (poisonTargetSeat && !poisonTargetAlive) {
+        window.alert("毒药只能选择存活玩家");
         return;
       }
       if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) {

@@ -22,6 +22,31 @@ async function getRoom(id, clientId, judgeToken = "") {
   return (await (await fetch(`${baseUrl}/api/rooms/${id}?${query}`)).json()).room;
 }
 
+async function createSystemRoom(suffix) {
+  const controllerId = `controller-${suffix}-${Date.now()}`;
+  const created = await post("/api/rooms", {
+    clientId: controllerId,
+    mode: "SYSTEM",
+    boardId: "pre_witch_hunter_idiot_mixed"
+  });
+  assert.equal(created.status, 200);
+  const players = Array.from({ length: 12 }, (_, index) => ({ clientId: `${suffix}-player-${index + 1}`, seat: index + 1 }));
+  for (const player of players) assert.equal((await post(`/api/rooms/${created.body.room.id}/seat`, player)).status, 200);
+  const controllerAuth = { clientId: controllerId, judgeToken: created.body.judgeToken };
+  assert.equal((await post(`/api/rooms/${created.body.room.id}/deal`, controllerAuth)).status, 200);
+  const views = [];
+  for (const player of players) views.push({ player, room: await getRoom(created.body.room.id, player.clientId) });
+  return { id: created.body.room.id, controllerId, controllerAuth, players, views };
+}
+
+async function findSystemActor(id, players) {
+  for (const player of players) {
+    const room = await getRoom(id, player.clientId);
+    if (room.systemNight?.canAct) return { player, room, step: room.currentNightSteps[0] };
+  }
+  return null;
+}
+
 test.before(async () => {
   server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
@@ -144,8 +169,86 @@ test("system mode keeps roles private and lets only the current role act", async
   assert.equal((await post(`/api/rooms/${id}/night-start`, controllerAuth)).status, 200);
 });
 
-test("all complex boards can complete the first system-guided night", async () => {
+test("system witch rules reject first-night self-save and invalid potion reuse", async () => {
+  const selfSave = await createSystemRoom("witch-self-save");
+  const witchView = selfSave.views.find((item) => item.room.assignments[0].roleId === "witch");
+  assert.ok(witchView);
+  const witchSeat = witchView.room.assignments[0].seat;
+  assert.equal((await post(`/api/rooms/${selfSave.id}/night-start`, selfSave.controllerAuth)).status, 200);
+  while (true) {
+    const actor = await findSystemActor(selfSave.id, selfSave.players);
+    assert.ok(actor);
+    if (actor.step.id === "witch_action") {
+      const rejected = await post(`/api/rooms/${selfSave.id}/night-action`, {
+        clientId: actor.player.clientId,
+        antidoteUsed: true,
+        poisonTargetSeat: 0
+      });
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.body.error, /首夜不能自救/);
+      break;
+    }
+    const payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+    if (actor.step.id === "wolves_kill") payload.targetSeats = [witchSeat];
+    else if (actor.step.targetCount > 0) payload.targetSeats = [selfSave.views.find((item) => item.player.clientId !== actor.player.clientId).room.assignments[0].seat];
+    assert.equal((await post(`/api/rooms/${selfSave.id}/night-action`, payload)).status, 200);
+  }
+
+  const potionReuse = await createSystemRoom("witch-potion-reuse");
+  const secondWitch = potionReuse.views.find((item) => item.room.assignments[0].roleId === "witch");
+  const exileTarget = potionReuse.views.find((item) => item.room.assignments[0].roleId === "villager").room.assignments[0].seat;
+  const savedTarget = potionReuse.views.find((item) => !["witch", "villager"].includes(item.room.assignments[0].roleId)).room.assignments[0].seat;
+  assert.equal((await post(`/api/rooms/${potionReuse.id}/night-start`, potionReuse.controllerAuth)).status, 200);
+  while (true) {
+    const controllerRoom = await getRoom(potionReuse.id, potionReuse.controllerId, potionReuse.controllerAuth.judgeToken);
+    if (controllerRoom.systemNight.complete) break;
+    const actor = await findSystemActor(potionReuse.id, potionReuse.players);
+    assert.ok(actor);
+    let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+    if (actor.step.id === "wolves_kill") payload.targetSeats = [savedTarget];
+    else if (actor.step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: true, poisonTargetSeat: 0 };
+    else if (actor.step.targetCount > 0) payload.targetSeats = [exileTarget];
+    assert.equal((await post(`/api/rooms/${potionReuse.id}/night-action`, payload)).status, 200);
+  }
+  assert.equal((await post(`/api/rooms/${potionReuse.id}/night-finish`, potionReuse.controllerAuth)).status, 200);
+  assert.equal((await post(`/api/rooms/${potionReuse.id}/system-publish-daybreak`, potionReuse.controllerAuth)).status, 200);
+  assert.equal((await post(`/api/rooms/${potionReuse.id}/exile-record`, { ...potionReuse.controllerAuth, noExile: false, seat: exileTarget })).status, 200);
+  assert.equal((await post(`/api/rooms/${potionReuse.id}/night-start`, potionReuse.controllerAuth)).status, 200);
+  while (true) {
+    const actor = await findSystemActor(potionReuse.id, potionReuse.players);
+    assert.ok(actor);
+    if (actor.step.id === "witch_action") {
+      const reused = await post(`/api/rooms/${potionReuse.id}/night-action`, {
+        clientId: secondWitch.player.clientId,
+        antidoteUsed: true,
+        poisonTargetSeat: 0
+      });
+      assert.equal(reused.status, 400);
+      assert.match(reused.body.error, /解药已经使用/);
+      const poisonedDead = await post(`/api/rooms/${potionReuse.id}/night-action`, {
+        clientId: secondWitch.player.clientId,
+        antidoteUsed: false,
+        poisonTargetSeat: exileTarget
+      });
+      assert.equal(poisonedDead.status, 400);
+      assert.match(poisonedDead.body.error, /存活玩家/);
+      break;
+    }
+    const payload = { clientId: actor.player.clientId, targetSeats: [], skipped: actor.step.allowSkip };
+    if (!payload.skipped && actor.step.targetCount > 0) payload.targetSeats = [savedTarget];
+    assert.equal((await post(`/api/rooms/${potionReuse.id}/night-action`, payload)).status, 200);
+  }
+});
+
+test("all complex boards can complete two system-guided nights", async () => {
   const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage"];
+  const expectedSecondNightSteps = {
+    masquerade: ["dancer_dance", "mask_check", "mask_give"],
+    treasure_master: ["treasure_pick", "treasure_skill", "wolves_kill"],
+    mechanical_wolf_spirit_medium: ["mechanical_guard", "mechanical_mimic"],
+    realm_of_trickery: ["magician_swap", "trickster_swap"],
+    dawn_voyage: ["siren_wind", "captain_board"]
+  };
   for (const boardId of boardIds) {
     const controllerId = `controller-${boardId}-${Date.now()}`;
     const created = await post("/api/rooms", { clientId: controllerId, mode: "SYSTEM", boardId });
@@ -155,36 +258,60 @@ test("all complex boards can complete the first system-guided night", async () =
     const players = Array.from({ length: 12 }, (_, index) => ({ clientId: `${boardId}-player-${index + 1}`, seat: index + 1 }));
     for (const player of players) assert.equal((await post(`/api/rooms/${id}/seat`, player)).status, 200);
     assert.equal((await post(`/api/rooms/${id}/deal`, controllerAuth)).status, 200);
-    assert.equal((await post(`/api/rooms/${id}/night-start`, controllerAuth)).status, 200);
+    const roleViews = [];
+    for (const player of players) roleViews.push({ player, room: await getRoom(id, player.clientId) });
+    const roleSeat = (roleId) => roleViews.find((item) => item.room.assignments[0].roleId === roleId)?.room.assignments[0].seat || 0;
+    const goodSeats = roleViews.filter((item) => item.room.assignments[0].camp === "GOOD").map((item) => item.room.assignments[0].seat);
+    let danceSeats = [];
 
-    while (true) {
-      const controllerRoom = await getRoom(id, controllerId, token);
-      if (controllerRoom.systemNight.complete) break;
-      let actor = null;
-      for (const player of players) {
-        const room = await getRoom(id, player.clientId);
-        if (room.systemNight?.canAct) {
-          actor = { player, room };
-          break;
+    async function runNight(nightNumber) {
+      assert.equal((await post(`/api/rooms/${id}/night-start`, controllerAuth)).status, 200);
+      const stepIds = [];
+      while (true) {
+        const controllerRoom = await getRoom(id, controllerId, token);
+        if (controllerRoom.systemNight.complete) break;
+        let actor = null;
+        for (const player of players) {
+          const room = await getRoom(id, player.clientId);
+          if (room.systemNight?.canAct) {
+            actor = { player, room };
+            break;
+          }
         }
+        assert.ok(actor, `${boardId}: no acting player for ${controllerRoom.systemNight.stepId}`);
+        const step = actor.room.currentNightSteps[0];
+        stepIds.push(step.id);
+        const candidates = (step.allowedSeats?.length ? step.allowedSeats : actor.room.aliveSeats).filter(Boolean);
+        let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+        if (step.id === "wolves_kill") payload.skipped = true;
+        else if (step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
+        else if (step.id === "siren_wind") payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false, windDirection: nightNumber === 1 ? "calm" : "tailwind" };
+        else if (step.id === "treasure_pick") {
+          const cards = actor.room.assignments[0].abilityState.treasureCards;
+          payload.cardRoleId = nightNumber === 1 ? "villager" : cards.find((card) => !["wolf", "villager"].includes(card));
+        } else if (step.id === "treasure_skill") {
+          const card = actor.room.systemNight.privateContext.treasureCardRoleId;
+          const requiredTarget = ["spirit_medium", "dreamer"].includes(card);
+          payload.skipped = !requiredTarget;
+          payload.targetSeats = requiredTarget ? [candidates[0]] : [];
+        } else if (step.id === "mechanical_mimic" && nightNumber === 1) payload.targetSeats = [roleSeat("guard")];
+        else if (step.id === "dancer_dance") {
+          danceSeats = goodSeats.filter((seat) => candidates.includes(seat)).slice(0, 3);
+          payload.targetSeats = danceSeats;
+        } else if (step.id === "mask_check") payload.targetSeats = [danceSeats[0]];
+        else if (step.id === "mask_give") payload.targetSeats = [candidates.find((seat) => !danceSeats.includes(seat))];
+        else if (step.targetCount > 0) payload.targetSeats = candidates.slice(nightNumber - 1, nightNumber - 1 + step.targetCount);
+        const acted = await post(`/api/rooms/${id}/night-action`, payload);
+        assert.equal(acted.status, 200, `${boardId}/night${nightNumber}/${step.id}: ${acted.body.error || "failed"}`);
       }
-      assert.ok(actor, `${boardId}: no acting player for ${controllerRoom.systemNight.stepId}`);
-      const step = actor.room.currentNightSteps[0];
-      let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
-      if (step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
-      else if (step.id === "siren_wind") payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false, windDirection: "calm" };
-      else if (step.id === "treasure_pick") payload.cardRoleId = actor.room.assignments[0].abilityState.treasureCards[0];
-      else if (step.id === "treasure_skill") {
-        const card = actor.room.systemNight.privateContext.treasureCardRoleId;
-        const canTarget = ["spirit_medium", "dreamer", "poisoner"].includes(card) || (card === "wolf" && actor.room.systemNight.privateContext.treasureWolfEligible);
-        payload.skipped = !canTarget;
-        payload.targetSeats = canTarget ? [1] : [];
-      } else if (step.targetCount === 1) payload.targetSeats = [1];
-      else if (step.targetCount === 2) payload.targetSeats = [1, 2];
-      else if (step.targetCount === 3) payload.targetSeats = [1, 2, 3];
-      const acted = await post(`/api/rooms/${id}/night-action`, payload);
-      assert.equal(acted.status, 200, `${boardId}/${step.id}: ${acted.body.error || "failed"}`);
+      assert.equal((await post(`/api/rooms/${id}/night-finish`, controllerAuth)).status, 200, boardId);
+      assert.equal((await post(`/api/rooms/${id}/system-publish-daybreak`, controllerAuth)).status, 200, boardId);
+      return stepIds;
     }
-    assert.equal((await post(`/api/rooms/${id}/night-finish`, controllerAuth)).status, 200, boardId);
+
+    await runNight(1);
+    assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...controllerAuth, noExile: true, seat: 0 })).status, 200);
+    const secondNightSteps = await runNight(2);
+    expectedSecondNightSteps[boardId].forEach((stepId) => assert.ok(secondNightSteps.includes(stepId), `${boardId} missing ${stepId}`));
   }
 });

@@ -1070,13 +1070,18 @@ async function handleRoomAction(request, env, route) {
       return json({ room: sanitizeRoom(room, { clientId, judgeToken }) });
     }
     if (step.id === "witch_action") {
-      const antidoteUsed = Boolean(body.antidoteUsed) && step.antidoteAvailable;
+      const requestedAntidote = Boolean(body.antidoteUsed);
+      if (requestedAntidote && !step.antidoteAvailable) return error(400, "解药已经使用");
+      const antidoteUsed = requestedAntidote && step.antidoteAvailable;
       const wolfAction = [...room.nightActions].reverse().find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
       const antidoteTargetSeat = antidoteUsed && wolfAction && wolfAction.targetSeats ? Number(wolfAction.targetSeats[0]) : 0;
       if (antidoteUsed && !antidoteTargetSeat) return error(400, "今晚无人被击杀，不能使用解药");
+      const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
+      if (antidoteUsed && room.night === 1 && antidoteTargetSeat === witchSeat) return error(400, "女巫首夜不能自救");
       const requestedPoisonSeat = Number(body.poisonTargetSeat || 0);
       const poisonTargetSeat = step.poisonAvailable && requestedPoisonSeat >= 1 && requestedPoisonSeat <= 12 ? requestedPoisonSeat : 0;
       if (requestedPoisonSeat && !poisonTargetSeat) return error(400, "毒药目标不合法或毒药已经使用");
+      if (poisonTargetSeat && !(room.assignments || []).some((item) => item.seat === poisonTargetSeat && item.alive !== false)) return error(400, "毒药只能选择存活玩家");
       if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) return error(400, "本版型中，女巫同一晚不能同时使用解药和毒药");
       const record = {
         night: room.night,
