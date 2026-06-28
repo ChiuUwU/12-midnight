@@ -696,10 +696,12 @@ async function handleApi(request, response, url) {
       const assignment = room.assignments.find((item) => item.seat === seat);
       if (assignment) assignment.alive = false;
     });
+    const reasons = body.reasons && typeof body.reasons === "object" ? body.reasons : {};
     const record = {
       day: room.night,
       phase: "DAYBREAK",
       seats,
+      reasons,
       createdAt: Date.now()
     };
     room.deathRecords.push(record);

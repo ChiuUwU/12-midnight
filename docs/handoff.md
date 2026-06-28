@@ -23,7 +23,29 @@
 
 ## 本轮目标
 
-曙光航纪版型 P0 修复 + 文档更新 + 准备提交。
+夜间结算 v1：死亡建议带原因显示，法官可修改确认，三端同步存储原因。
+
+## 已完成
+
+- ✅ renderDeathRecord 显示系统建议死亡及原因
+- ✅ death-submit 存储 reasons 到 deathRecords
+- ✅ server.js / functions/api 接受并持久化 reasons
+- ✅ state.deathDraftReasons 传递原因数据
+- ✅ tests/night-resolution.test.js 2/2 通过
+
+## 修改文件
+
+- `web/app.js` — renderDeathRecord + death-submit + deathDraftReasons
+- `server.js` — death-record handler 接受 reasons
+- `functions/api/rooms/[[path]].js` — 同上
+- `tests/night-resolution.test.js` — 新增
+- `docs/handoff.md` — 本文件
+
+## 未完成
+
+- 舞池结算、盗宝技能、自动胜负（下一轮）
+
+---
 
 ## 已完成
 

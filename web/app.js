@@ -424,6 +424,7 @@
       remoteRoom: null,
       judgeTokens: {},
       deathDraftSeats: [],
+      deathDraftReasons: {},
       rooms: {}
     };
   }
@@ -1894,9 +1895,23 @@
       return;
     }
     const draftSeats = state.deathDraftSeats || [];
+    const draftReasons = state.deathDraftReasons || {};
+    const reasonsHtml = draftSeats.length ? `
+      <section class="panel">
+        <div class="label">系统建议死亡</div>
+        <div class="notice">以下为系统根据夜间行动自动计算的建议。可点击座位取消选择。</div>
+        <div class="list">
+          ${draftSeats.map((seat) => `
+            <div class="list-item" style="justify-content:space-between;">
+              <div><span class="value">${seat}号</span> <span class="body-text">${(draftReasons[seat] || ["未知"]).join("、")}</span></div>
+            </div>
+          `).join("")}
+        </div>
+      </section>
+    ` : "";
     app.innerHTML = `
       ${pageHeader("记录天亮死亡", "选择昨夜死亡玩家，确认后所有人可见")}
-      ${draftSeats.length ? `<section class="panel"><div class="notice">已带入建议死亡：${formatSeatList(draftSeats)}。仍可手动调整。</div></section>` : ""}
+      ${reasonsHtml}
       <section class="seat-grid">
         ${room.seats.map((seat) => `<button class="seat ${draftSeats.includes(seat.seat) ? "selected" : ""}" data-action="death-seat" data-seat="${seat.seat}">${seat.seat}号</button>`).join("")}
       </section>
@@ -2248,7 +2263,10 @@
     }
 
     if (action === "use-suggested-deaths" && room) {
-      state.deathDraftSeats = calculateSuggestedDeaths(room, room.night).map((item) => item.seat);
+      const suggested = calculateSuggestedDeaths(room, room.night);
+      state.deathDraftSeats = suggested.map((item) => item.seat);
+      state.deathDraftReasons = {};
+      suggested.forEach((item) => { state.deathDraftReasons[item.seat] = item.reasons; });
       state.view = "death";
       saveState();
       render();
@@ -2260,6 +2278,7 @@
         if (IS_REMOTE) {
           await remotePost("night-start");
           state.deathDraftSeats = [];
+          state.deathDraftReasons = {};
           state.view = "night";
           saveState();
           render();
@@ -2276,6 +2295,7 @@
         room.nightActions = room.nightActions || [];
         writeLog(room, "NIGHT_STARTED", { night: room.night });
         state.deathDraftSeats = [];
+        state.deathDraftReasons = {};
         state.view = "night";
         saveState();
         render();
@@ -2504,7 +2524,10 @@
       try {
         if (IS_REMOTE) {
           await remotePost("night-finish");
-          state.deathDraftSeats = calculateSuggestedDeaths(state.remoteRoom, state.remoteRoom.night).map((item) => item.seat);
+          const remSug = calculateSuggestedDeaths(state.remoteRoom, state.remoteRoom.night);
+          state.deathDraftSeats = remSug.map((item) => item.seat);
+          state.deathDraftReasons = {};
+          remSug.forEach((item) => { state.deathDraftReasons[item.seat] = item.reasons; });
           state.view = "room";
           saveState();
           render();
@@ -2512,7 +2535,10 @@
         }
         room.phase = "DAY";
         writeLog(room, "NIGHT_FINISHED", { night: room.night });
-        state.deathDraftSeats = calculateSuggestedDeaths(room, room.night).map((item) => item.seat);
+        const locSug = calculateSuggestedDeaths(room, room.night);
+        state.deathDraftSeats = locSug.map((item) => item.seat);
+        state.deathDraftReasons = {};
+        locSug.forEach((item) => { state.deathDraftReasons[item.seat] = item.reasons; });
         state.view = "room";
         saveState();
         render();
@@ -2662,9 +2688,13 @@
         ? []
         : Array.from(app.querySelectorAll(".seat.selected")).map((item) => Number(item.dataset.seat)).sort((a, b) => a - b);
       try {
+        const draftReasons = state.deathDraftReasons || {};
+        const reasonsBySeat = {};
+        seats.forEach((seat) => { reasonsBySeat[seat] = draftReasons[seat] || []; });
         if (IS_REMOTE) {
-          await remotePost("death-record", { seats });
+          await remotePost("death-record", { seats, reasons: reasonsBySeat });
           state.deathDraftSeats = [];
+          state.deathDraftReasons = {};
           state.view = "room";
           saveState();
           render();
@@ -2675,11 +2705,12 @@
           if (assignment) assignment.alive = false;
           trackCaptainDeath(room, seat);
         });
-        const record = { day: room.night, phase: "DAYBREAK", seats, createdAt: Date.now() };
+        const record = { day: room.night, phase: "DAYBREAK", seats, reasons: reasonsBySeat, createdAt: Date.now() };
         room.deathRecords = room.deathRecords || [];
         room.deathRecords.push(record);
         writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
         state.deathDraftSeats = [];
+        state.deathDraftReasons = {};
         state.view = "room";
         saveState();
         render();
