@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const path = require("node:path");
+const { calculateSuggestedDeaths } = require("../web/night-resolution");
 
 const port = crypto.randomInt(20000, 40000);
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -24,7 +25,7 @@ async function post(p, body) {
 }
 
 test.before(async () => {
-  srv = require("node:child_process").spawn("node", ["server.js"], {
+  srv = require("node:child_process").spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1" },
     stdio: "pipe"
@@ -72,19 +73,19 @@ async function newRoom() {
 
 test("death record stores reasons on night 2", async () => {
   const { clientId: c, id, token: t } = await newRoom();
-  console.log("Room ID:", id, "Token:", t.substring(0,8));
   await runNight2(id, c, t, 7, 9);
-  // Check room state first
-  const g = await (await fetch(`${baseUrl}/api/rooms/${id}?clientId=${c}&judgeToken=${t}`)).json();
-  console.log("Phase:", g.room.phase, "Night:", g.room.night, "SheriffDone:", g.room.sheriffElectionDone);
   const r = await post(`/api/rooms/${id}/death-record`, {
     clientId: c, judgeToken: t, seats: [7, 9],
-    reasons: { "7": ["狼刀"], "9": ["女巫毒"] }
+    reasons: { "7": [" 狼刀 ", "狼刀", 7], "9": ["女巫毒"], "12": ["不应保存"] }
   });
   assert.equal(r.status, 200);
   const last = r.body.room.deathRecords[r.body.room.deathRecords.length - 1];
-  assert.ok(last.reasons);
   assert.deepEqual(last.seats, [7, 9]);
+  assert.deepEqual(last.reasons, { "7": ["狼刀"], "9": ["女巫毒"] });
+
+  const playerRoom = await (await fetch(`${baseUrl}/api/rooms/${id}?clientId=test-1`)).json();
+  const publicRecord = playerRoom.room.deathRecords[playerRoom.room.deathRecords.length - 1];
+  assert.equal(Object.hasOwn(publicRecord, "reasons"), false);
 });
 
 test("death record without reasons still works", async () => {
@@ -94,5 +95,46 @@ test("death record without reasons still works", async () => {
     clientId: c, judgeToken: t, seats: [4]
   });
   assert.equal(r.status, 200);
-  assert.deepEqual(r.body.room.deathRecords[r.body.room.deathRecords.length - 1].seats, [4]);
+  const record = r.body.room.deathRecords[r.body.room.deathRecords.length - 1];
+  assert.deepEqual(record.seats, [4]);
+  assert.deepEqual(record.reasons, { "4": [] });
+});
+
+function resolutionRoom(boardId, actions, extra = {}) {
+  return {
+    boardId,
+    night: 2,
+    nightActions: actions,
+    assignments: Array.from({ length: 12 }, (_, index) => ({
+      seat: index + 1,
+      roleId: index === 0 ? "witch" : "villager",
+      alive: true
+    })),
+    ...extra
+  };
+}
+
+test("calculator derives wolf, poison and same-guard-save reasons", () => {
+  const ordinary = resolutionRoom("pre_witch_hunter_idiot_mixed", [
+    { night: 2, stepId: "wolves_kill", targetSeats: [3] },
+    { night: 2, stepId: "witch_action", antidoteUsed: false, poisonTargetSeat: 5 }
+  ]);
+  assert.deepEqual(calculateSuggestedDeaths(ordinary), [
+    { seat: 3, reasons: ["狼刀"] },
+    { seat: 5, reasons: ["女巫毒"] }
+  ]);
+
+  const guardedAndSaved = resolutionRoom("mechanical_wolf_spirit_medium", [
+    { night: 2, stepId: "guard_guard", targetSeats: [3] },
+    { night: 2, stepId: "wolves_kill", targetSeats: [3] },
+    { night: 2, stepId: "witch_action", antidoteUsed: true, antidoteTargetSeat: 3, poisonTargetSeat: 0 }
+  ]);
+  assert.deepEqual(calculateSuggestedDeaths(guardedAndSaved), [{ seat: 3, reasons: ["同守同救"] }]);
+});
+
+test("calculator applies Dawn Voyage wind and drowning", () => {
+  const room = resolutionRoom("dawn_voyage", [
+    { night: 2, stepId: "wolves_kill", targetSeats: [2] }
+  ], { windDirection: "tailwind", boardedSeat: 4 });
+  assert.deepEqual(calculateSuggestedDeaths(room), [{ seat: 3, reasons: ["溺亡", "狼刀"] }]);
 });

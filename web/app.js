@@ -703,17 +703,6 @@
     return seat;
   }
 
-  function getDrownedSeat(boardedSeat, wind) {
-    if (wind === "calm" || !boardedSeat) return 0;
-    if (wind === "tailwind") return ((boardedSeat + 10) % 12) + 1;
-    if (wind === "headwind") return (boardedSeat % 12) + 1;
-    return 0;
-  }
-
-  function isDrownImmune(roleId) {
-    return roleId === "siren" || roleId === "captain";
-  }
-
   function trackCaptainDeath(room, seat) {
     if (room.boardId !== "dawn_voyage") return;
     const assignment = room.assignments.find((a) => a.seat === seat);
@@ -723,92 +712,7 @@
   }
 
   function calculateSuggestedDeaths(room, night = room.night) {
-    const actions = (room.nightActions || []).filter((item) => item.night === night);
-    const previousActions = (room.nightActions || []).filter((item) => item.night === night - 1);
-    const firstTarget = (stepId, source = actions) => {
-      const action = source.find((item) => item.stepId === stepId && !item.skipped);
-      return action && action.targetSeats && action.targetSeats.length ? action.targetSeats[0] : 0;
-    };
-    const roleAtSeat = (seat) => {
-      const assignment = (room.assignments || []).find((item) => item.seat === seat);
-      return assignment ? assignment.roleId : "";
-    };
-    const deaths = new Map();
-    const addDeath = (seat, reason) => {
-      if (!seat) return;
-      const reasons = deaths.get(seat) || [];
-      reasons.push(reason);
-      deaths.set(seat, reasons);
-    };
-
-    const rawWolfKill = firstTarget("wolves_kill");
-    let wolfKill = mapNightSeat(room, rawWolfKill, night);
-    const witchAction = actions.find((item) => item.stepId === "witch_action");
-    const rawAntidote = witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote");
-    let antidote = mapNightSeat(room, rawAntidote, night);
-    const rawWitchPoison = witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison");
-    let witchPoison = mapNightSeat(room, rawWitchPoison, night);
-    const poisonerPoison = firstTarget("poisoner_poison");
-    const guard = firstTarget("guard_guard");
-    const dream = firstTarget("dreamer_dream");
-    const previousDream = firstTarget("dreamer_dream", previousActions);
-    const mechanicalMimicSeat = firstTarget("mechanical_mimic");
-    const mechanicalMimicRole = roleAtSeat(mechanicalMimicSeat);
-    const mechanicalGuard = room.boardId === "mechanical_wolf_spirit_medium" && mechanicalMimicRole === "guard" ? guard : 0;
-    const witchPoisonImmuneRoles = room.boardId === "masquerade" ? ["dancer", "mask"] : [];
-
-    if (room.boardId === "dawn_voyage") {
-      const wind = room.windDirection || "calm";
-      const boarded = room.boardedSeat || 0;
-      wolfKill = applyWind(wolfKill, wind, boarded);
-      antidote = applyWind(antidote, wind, boarded);
-      witchPoison = applyWind(witchPoison, wind, boarded);
-      const drownedSeat = getDrownedSeat(boarded, wind);
-      if (drownedSeat && !isDrownImmune(roleAtSeat(drownedSeat))) {
-        addDeath(drownedSeat, "溺亡");
-      }
-      if (wind === "calm" && boarded && wolfKill === boarded) {
-        wolfKill = 0;
-      }
-    }
-
-    addDeath(wolfKill, "狼刀");
-    if (witchPoison && !witchPoisonImmuneRoles.includes(roleAtSeat(witchPoison))) {
-      addDeath(witchPoison, "女巫毒");
-    }
-    addDeath(poisonerPoison, "毒师毒");
-    if (dream && previousDream && dream === previousDream) addDeath(dream, "连续摄梦");
-
-    if (antidote && deaths.has(antidote)) {
-      const reasons = deaths.get(antidote).filter((reason) => reason !== "狼刀");
-      if (reasons.length) deaths.set(antidote, reasons);
-      else deaths.delete(antidote);
-    }
-
-    const sameGuardAndSave = guard && antidote && wolfKill && guard === antidote && antidote === wolfKill;
-    if (sameGuardAndSave) deaths.set(wolfKill, ["同守同救"]);
-
-    if (guard && deaths.has(guard) && !sameGuardAndSave) {
-      const removable = mechanicalGuard === guard ? ["狼刀", "女巫毒"] : ["狼刀"];
-      const remaining = deaths.get(guard).filter((reason) => !removable.includes(reason));
-      if (remaining.length) deaths.set(guard, remaining);
-      else deaths.delete(guard);
-    }
-
-    if (mechanicalGuard && witchPoison === mechanicalGuard) {
-      const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
-      addDeath(witchSeat, "机械守卫弹毒");
-    }
-
-    if (dream && deaths.has(dream)) {
-      const remaining = deaths.get(dream).filter((reason) => !["狼刀", "女巫毒", "毒师毒"].includes(reason));
-      if (remaining.length) deaths.set(dream, remaining);
-      else deaths.delete(dream);
-    }
-
-    return [...deaths.entries()]
-      .map(([seat, reasons]) => ({ seat, reasons }))
-      .sort((left, right) => left.seat - right.seat);
+    return window.NightResolution.calculateSuggestedDeaths(room, night);
   }
 
   function getNightActionTarget(room, stepId, night = room.night) {
@@ -870,6 +774,13 @@
     });
   }
 
+  function formatDeathReasonSummary(record) {
+    return (record.seats || []).map((seat) => {
+      const reasons = record.reasons && Array.isArray(record.reasons[seat]) ? record.reasons[seat] : [];
+      return reasons.length ? `${seat}号：${reasons.join("、")}` : "";
+    }).filter(Boolean).join("；");
+  }
+
   function formatLog(log) {
     const payload = log.payload || {};
     const seats = (value) => formatSeatList(Array.isArray(value) ? value : []);
@@ -889,7 +800,7 @@
       SHERIFF_WITHDRAW_CONFIRMED: ["退水名单", seats(payload.seats)],
       SHERIFF_SELF_WITHDRAWN: ["玩家退水", `${payload.seat || ""}号退水`],
       SHERIFF_VOTE_CONFIRMED: ["警徽投票", payload.electedSeat ? `${payload.electedSeat}号当选警长` : payload.badgeLost ? "警徽流失" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生警长"],
-      DAYBREAK_DEATHS_CONFIRMED: ["天亮死亡", payload.seats && payload.seats.length ? seats(payload.seats) : "平安夜"],
+      DAYBREAK_DEATHS_CONFIRMED: ["天亮死亡", payload.seats && payload.seats.length ? `${seats(payload.seats)}${formatDeathReasonSummary(payload) ? `（${formatDeathReasonSummary(payload)}）` : ""}` : "平安夜"],
       DAY_VOTE_CONFIRMED: ["放逐投票", payload.exiledSeat ? `${payload.exiledSeat}号出局` : payload.noExile ? "无人出局" : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票 PK` : "未产生结果"],
       DAY_VOTE_PENDING: ["等待发动技能", payload.exiledSeat ? `${payload.exiledSeat}号为原始出局结果，尚未宣布实际死讯` : payload.pkSeats && payload.pkSeats.length ? `${seats(payload.pkSeats)} 平票，尚未进入 PK` : "等待定序王子"],
       ORDER_PRINCE_ACTIVATED: ["定序王子发动", "首轮投票作废，所有存活玩家重新自由投票"],
@@ -1125,7 +1036,8 @@
       pushTimelineItem(groups, `night-${action.night}`, `第 ${action.night} 天夜晚`, detail);
     });
     (room.deathRecords || []).forEach((record) => {
-      pushTimelineItem(groups, `day-${record.day}`, `第 ${record.day} 天白天`, `天亮死亡：${record.seats && record.seats.length ? formatSeatList(record.seats) : "平安夜"}`);
+      const reasons = formatDeathReasonSummary(record);
+      pushTimelineItem(groups, `day-${record.day}`, `第 ${record.day} 天白天`, `天亮死亡：${record.seats && record.seats.length ? `${formatSeatList(record.seats)}${reasons ? `（${reasons}）` : ""}` : "平安夜"}`);
     });
     if (room.sheriffCandidates && room.sheriffCandidates.length) {
       pushTimelineItem(groups, "day-1", "第 1 天白天", `上警玩家：${formatSeatList(room.sheriffCandidates)}`);
@@ -2690,7 +2602,9 @@
       try {
         const draftReasons = state.deathDraftReasons || {};
         const reasonsBySeat = {};
-        seats.forEach((seat) => { reasonsBySeat[seat] = draftReasons[seat] || []; });
+        seats.forEach((seat) => {
+          reasonsBySeat[seat] = Array.isArray(draftReasons[seat]) && draftReasons[seat].length ? draftReasons[seat] : ["法官手动确认"];
+        });
         if (IS_REMOTE) {
           await remotePost("death-record", { seats, reasons: reasonsBySeat });
           state.deathDraftSeats = [];

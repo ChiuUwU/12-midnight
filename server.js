@@ -309,7 +309,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     orderPrinceUsed: Boolean(room.orderPrinceUsed),
     orderPrinceRevotePending: judge ? Boolean(room.orderPrinceRevotePending) : false,
     judgeCode: judge ? room.judgeCode : "",
-    deathRecords: room.deathRecords || [],
+    deathRecords: judge ? room.deathRecords || [] : (room.deathRecords || []).map(({ reasons, ...record }) => record),
     exileRecords: room.exileRecords || [],
     windDirection: judge ? room.windDirection || "calm" : "",
     lastWindDirection: judge ? room.lastWindDirection || "calm" : "",
@@ -318,6 +318,19 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     captainDiedLastDay: judge ? Boolean(room.captainDiedLastDay) : false,
     captainAliveAtDawn: judge ? Boolean(room.captainAliveAtDawn) : false
   };
+}
+
+function normalizeDeathReasons(input, seats) {
+  const source = input && typeof input === "object" && !Array.isArray(input) ? input : {};
+  const normalized = {};
+  seats.forEach((seat) => {
+    const values = Array.isArray(source[String(seat)]) ? source[String(seat)] : [];
+    normalized[String(seat)] = [...new Set(values
+      .filter((value) => typeof value === "string")
+      .map((value) => value.trim().slice(0, 40))
+      .filter(Boolean))].slice(0, 5);
+  });
+  return normalized;
 }
 
 function getAliveSeats(room) {
@@ -696,7 +709,7 @@ async function handleApi(request, response, url) {
       const assignment = room.assignments.find((item) => item.seat === seat);
       if (assignment) assignment.alive = false;
     });
-    const reasons = body.reasons && typeof body.reasons === "object" ? body.reasons : {};
+    const reasons = normalizeDeathReasons(body.reasons, seats);
     const record = {
       day: room.night,
       phase: "DAYBREAK",
