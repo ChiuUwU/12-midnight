@@ -304,6 +304,44 @@
       .sort((left, right) => left - right);
   }
 
+  function roleAtTarget(room, action) {
+    const seat = action && action.targetSeats && Number(action.targetSeats[0]);
+    return (room && room.assignments || []).find((assignment) => assignment.seat === seat)?.roleId || "";
+  }
+
+  function previousMechanicalRole(room, night) {
+    const action = (room && room.nightActions || []).find((item) => item.night === night - 1 && item.stepId === "mechanical_mimic" && !item.skipped);
+    return roleAtTarget(room, action);
+  }
+
+  function currentTreasureCard(room, night = room && room.night) {
+    return (room && room.nightActions || []).find((item) => item.night === night && item.stepId === "treasure_pick" && !item.skipped)?.cardRoleId || "";
+  }
+
+  function mechanicalSkillStep(room, night) {
+    const roleId = previousMechanicalRole(room, night);
+    const configs = {
+      guard: { id: "mechanical_guard", label: "机械狼使用守卫技能", allowSkip: true },
+      witch: { id: "mechanical_poison", label: "机械狼使用毒药技能", allowSkip: true },
+      spirit_medium: { id: "mechanical_check", label: "机械狼查验具体身份", allowSkip: false }
+    };
+    if (roleId === "wolf") {
+      const wolfPartnerAlive = (room.assignments || []).some((assignment) => assignment.alive !== false && assignment.roleId === "wolf");
+      return wolfPartnerAlive ? null : { id: "mechanical_kill", actor: "mechanical_wolf", label: "机械狼发动技能刀", targetCount: 1, allowSkip: true, skillRoleId: roleId };
+    }
+    return configs[roleId] ? { ...configs[roleId], actor: "mechanical_wolf", targetCount: 1, skillRoleId: roleId } : null;
+  }
+
+  function shouldIncludeNightStep(room, step) {
+    const assignments = room && room.assignments || [];
+    if (!assignments.length || step.actor === "system") return true;
+    if (step.actor === "wolf_team") {
+      const extraMembers = room.boardId === "realm_of_trickery" ? ["trickster"] : room.boardId === "dawn_voyage" ? ["siren"] : [];
+      return assignments.some((assignment) => assignment.alive !== false && ["wolf", "wolf_king", ...extraMembers].includes(assignment.roleId));
+    }
+    return assignments.some((assignment) => assignment.alive !== false && assignment.roleId === step.actor);
+  }
+
   function createNightSteps(boardId, night, room = null) {
     const firstNight = night === 1;
     const steps = [];
@@ -343,6 +381,7 @@
     } else if (boardId === "treasure_master") {
       steps.push(
         { id: "treasure_pick", actor: "treasure_master", label: "盗宝大师选择今晚使用的盗宝牌", targetCount: 0, allowSkip: false, needsCard: true },
+        { id: "treasure_skill", actor: "treasure_master", label: "盗宝大师使用盗宝牌技能", targetCount: 1, allowSkip: true },
         { id: "dreamer_dream", actor: "dreamer", label: "摄梦人选择摄梦目标", targetCount: 1, allowSkip: false }
       );
       if (!firstNight) steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
@@ -361,6 +400,10 @@
         { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true }
       );
       if (witchStep) steps.push(witchStep);
+      if (!firstNight) {
+        const skillStep = mechanicalSkillStep(room, night);
+        if (skillStep) steps.push(skillStep);
+      }
       steps.push(
         { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
         { id: "spirit_medium_check", actor: "spirit_medium", label: "通灵师查验具体身份", targetCount: 1, allowSkip: false }
@@ -409,7 +452,7 @@
         steps.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
       }
     }
-    return steps.map((step, index) => ({ ...step, index }));
+    return steps.filter((step) => shouldIncludeNightStep(room, step)).map((step, index) => ({ ...step, index }));
   }
 
   let state = loadState();
@@ -495,6 +538,10 @@
       orderPrinceUsed: false,
       orderPrinceRevotePending: false,
       deathRecords: [],
+      pendingNightResolution: null,
+      pendingDelayedDeaths: [],
+      pendingDeathSkills: [],
+      deathSkillRecords: [],
       exileRecords: [],
       windDirection: "calm",
       lastWindDirection: "calm",
@@ -679,8 +726,12 @@
     record.exiledSeat = actualExiledSeat;
     if (actualExiledSeat) {
       const assignment = room.assignments.find((item) => item.seat === actualExiledSeat);
-      if (assignment) assignment.alive = false;
+      if (assignment) {
+        assignment.alive = false;
+        if (assignment.roleId === "idiot") assignment.revealed = true;
+      }
       trackCaptainDeath(room, actualExiledSeat);
+      queueDeathSkills(room, [actualExiledSeat], "EXILE");
     }
     const exileRecord = {
       day: room.night,
@@ -712,7 +763,30 @@
   }
 
   function calculateSuggestedDeaths(room, night = room.night) {
+    if (room.pendingNightResolution && night === room.night) {
+      return room.pendingNightResolution.deaths || [];
+    }
     return window.NightResolution.calculateSuggestedDeaths(room, night);
+  }
+
+  function queueDeathSkills(room, seats, phase, reasonsBySeat = {}) {
+    room.pendingDeathSkills = room.pendingDeathSkills || [];
+    room.deathSkillRecords = room.deathSkillRecords || [];
+    seats.forEach((seat) => {
+      const resolution = window.NightResolution.getDeathSkillResolution(room, {
+        seat,
+        phase,
+        reasons: reasonsBySeat[String(seat)] || [],
+        day: room.night
+      });
+      if (!resolution) return;
+      const record = { ...resolution, phase, resolved: !resolution.eligible, createdAt: Date.now() };
+      room.deathSkillRecords.push(record);
+      if (resolution.eligible && !room.pendingDeathSkills.some((item) => item.seat === seat && item.day === room.night)) {
+        room.pendingDeathSkills.push(record);
+      }
+      writeLog(room, resolution.eligible ? "DEATH_SKILL_PENDING" : "DEATH_SKILL_BLOCKED", record);
+    });
   }
 
   function getNightActionTarget(room, stepId, night = room.night) {
@@ -732,6 +806,10 @@
       return `女巫行动：${antidote}；${poison}`;
     }
     if (action.stepId === "witch_antidote") return action.skipped ? "女巫选择不救" : `女巫救 ${formatSeatList(action.targetSeats || [])}`;
+    if (action.stepId === "treasure_skill") {
+      const role = (getRole(action.cardRoleId) || { name: action.cardRoleId }).name;
+      return action.skipped ? `盗宝大师使用${role}牌：不发动` : `盗宝大师使用${role}牌：${formatSeatList(action.targetSeats || [])}`;
+    }
     if (action.skipped) return `${action.label || "夜间行动"}：空过`;
     if (action.cardRoleId) return `${action.label || "夜间行动"}：选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}`;
     if (action.targetSeats && action.targetSeats.length) {
@@ -741,15 +819,37 @@
     return action.label || "夜间行动";
   }
 
-  function validateNightAction(room, step, targetSeats, skipped) {
+  function validateNightAction(room, step, targetSeats, skipped, cardRoleId = "") {
+    if (step.id === "treasure_pick") {
+      const treasure = (room.assignments || []).find((assignment) => assignment.roleId === "treasure_master");
+      const cards = treasure?.abilityState?.treasureCards || [];
+      if (!cards.includes(cardRoleId)) return "所选身份不在盗宝牌堆中";
+      const previous = (room.nightActions || []).find((action) => action.night === room.night - 1 && action.stepId === "treasure_pick");
+      if (previous && previous.cardRoleId === cardRoleId) return "盗宝大师不能连续两晚选择同一张牌";
+    }
+    if (step.id === "treasure_skill") {
+      const activeCard = currentTreasureCard(room);
+      if (!activeCard) return "未找到本夜选择的盗宝牌";
+      if (["spirit_medium", "dreamer"].includes(activeCard) && skipped) return "当前盗宝牌必须选择一名目标";
+      if (["villager", "hunter"].includes(activeCard) && !skipped) return "当前盗宝牌没有主动夜间技能";
+      if (activeCard === "poisoner" && !skipped && (room.nightActions || []).some((action) => action.stepId === "treasure_skill" && action.cardRoleId === "poisoner" && !action.skipped)) return "盗宝毒师的毒药已经使用过";
+      if (activeCard === "wolf" && !skipped && (room.assignments || []).some((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId))) return "仍有狼人同伴存活，盗宝狼人不能发动击杀";
+    }
     if (skipped) return "";
+    if (targetSeats.some((seat) => !(room.assignments || []).some((assignment) => assignment.seat === seat && assignment.alive !== false))) {
+      return "夜间技能只能选择存活玩家";
+    }
+    if (["mask_check", "mask_give"].includes(step.id)) {
+      const previous = (room.nightActions || []).find((action) => action.night === room.night - 1 && action.stepId === step.id && !action.skipped);
+      if (previous?.targetSeats?.[0] === targetSeats[0]) return step.id === "mask_check" ? "假面不能连续两晚验证同一名玩家" : "假面不能连续两晚给予同一名玩家面具";
+    }
     if (Array.isArray(step.allowedSeats) && targetSeats.some((seat) => !step.allowedSeats.includes(seat))) {
       return "所选玩家不符合当前技能的可选范围";
     }
-    if (step.id === "guard_guard") {
+    if (["guard_guard", "mechanical_guard"].includes(step.id)) {
       const lastGuard = [...(room.nightActions || [])]
         .reverse()
-        .find((action) => action.stepId === "guard_guard" && action.night === room.night - 1 && !action.skipped);
+        .find((action) => action.stepId === step.id && action.night === room.night - 1 && !action.skipped);
       if (lastGuard && lastGuard.targetSeats && lastGuard.targetSeats[0] === targetSeats[0]) {
         return "守卫不能连续两晚守护同一名玩家";
       }
@@ -806,6 +906,10 @@
       ORDER_PRINCE_ACTIVATED: ["定序王子发动", "首轮投票作废，所有存活玩家重新自由投票"],
       ORDER_PRINCE_DECLINED: ["定序王子未发动", "继续结算原始票型"],
       EXILE_CONFIRMED: ["白天放逐", payload.noExile ? "无人出局" : payload.rawSeat && payload.rawSeat !== payload.seat ? `原始${payload.rawSeat}号，换号后${payload.seat}号实际出局` : `${payload.seat || ""}号出局`],
+      DELAYED_DEATH_CONFIRMED: ["延迟死亡", `${payload.seats?.[0] || ""}号发言结束后死亡`],
+      DEATH_SKILL_PENDING: ["等待死亡技能", `${payload.seat || ""}号可以发动死亡技能`],
+      DEATH_SKILL_BLOCKED: ["死亡技能受限", `${payload.seat || ""}号：${payload.reason || "不能发动"}`],
+      DEATH_SKILL_RESOLVED: ["死亡技能结算", payload.skipped ? `${payload.seat || ""}号不开枪` : `${payload.seat || ""}号带走${payload.targetSeat || ""}号`],
       SHERIFF_BADGE_TRANSFERRED: ["警徽移交", `警徽移交给 ${payload.seat || ""}号`],
       SHERIFF_BADGE_DESTROYED: ["撕毁警徽", "警徽已撕毁"],
       GAME_ENDED: ["结束游戏", "游戏已结束"]
@@ -932,6 +1036,11 @@
       poisoner_poison: "毒师请睁眼，请选择发动技能的号码。",
       spirit_medium_check: "通灵师请睁眼，请验人，他的身份是。",
       mechanical_mimic: "机械狼请睁眼，请选择今晚模仿的目标。记录后闭眼。",
+      mechanical_guard: "机械狼请睁眼，请选择今晚守护的目标，也可以空守。",
+      mechanical_poison: "机械狼请睁眼，请选择今晚毒杀的目标，也可以不发动。",
+      mechanical_check: "机械狼请睁眼，请查验一名玩家的具体身份。",
+      mechanical_kill: "机械狼请睁眼，其他狼人已经出局，请选择技能刀目标，也可以空刀。",
+      treasure_skill: "盗宝大师请根据今晚选择的盗宝牌发动对应技能。",
       guard_guard: "守卫请睁眼，请选择今晚守护目标；也可以空守。选择后闭眼。",
       trickster_swap: "诡术师请睁眼，确认交换的目标。",
       magician_swap: "魔术师请睁眼，确认交换的目标。",
@@ -948,7 +1057,8 @@
   }
 
   function getNightResultText(room, step, targetSeats) {
-    if (!step || !["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id)) return "";
+    const treasureCheck = step && step.id === "treasure_skill" && currentTreasureCard(room) === "spirit_medium";
+    if (!step || (!["seer_check", "spirit_medium_check", "mechanical_mimic", "mechanical_check"].includes(step.id) && !treasureCheck)) return "";
     const selectedSeat = targetSeats && targetSeats.length ? Number(targetSeats[0]) : 0;
     if (!selectedSeat) return "选择目标后，这里会显示需要告知角色的结果。";
     let seat = step.id === "seer_check" ? mapNightSeat(room, selectedSeat, room.night) : selectedSeat;
@@ -962,14 +1072,20 @@
       const result = assignment.camp === "WOLF" ? "狼人" : "好人";
       return selectedSeat === seat ? `${seat}号查验结果：${result}` : `选择${selectedSeat}号，实际查验${seat}号：${result}`;
     }
-    if (step.id === "spirit_medium_check") {
+    if (["spirit_medium_check", "mechanical_check"].includes(step.id) || treasureCheck) {
+      if (step.id === "spirit_medium_check" && assignment.roleId === "mechanical_wolf") {
+        const mimic = (room.nightActions || []).find((item) => item.night === room.night && item.stepId === "mechanical_mimic" && !item.skipped);
+        const mimickedRole = getRole(roleAtTarget(room, mimic));
+        return `${seat}号具体身份：${mimickedRole ? mimickedRole.name : role.name}`;
+      }
       return `${seat}号具体身份：${role.name}`;
     }
     return `${seat}号具体身份：${role.name}，请告知机械狼。`;
   }
 
   function getNightResultHtml(room, step, targetSeats) {
-    if (!step || !["seer_check", "spirit_medium_check", "mechanical_mimic"].includes(step.id)) return "";
+    const treasureCheck = step && step.id === "treasure_skill" && currentTreasureCard(room) === "spirit_medium";
+    if (!step || (!["seer_check", "spirit_medium_check", "mechanical_mimic", "mechanical_check"].includes(step.id) && !treasureCheck)) return "";
     const text = getNightResultText(room, step, targetSeats);
     return `<section class="panel result-panel"><div class="label">告知结果</div><div class="value" id="nightResult">${escapeHtml(text)}</div></section>`;
   }
@@ -1014,6 +1130,11 @@
     if (action.stepId === "spirit_medium_check") return `通灵师验 ${seatText}${seats[0] ? `（${roleNameAtSeat(room, seats[0])}）` : ""}`;
     if (action.stepId === "mechanical_mimic") return `机械狼模仿 ${seatText}${seats[0] ? `（${roleNameAtSeat(room, seats[0])}）` : ""}`;
     if (action.stepId === "treasure_pick") return `盗宝大师选择 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}`;
+    if (action.stepId === "treasure_skill") return action.skipped ? `盗宝大师使用 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}：不发动` : `盗宝大师使用 ${(getRole(action.cardRoleId) || { name: action.cardRoleId }).name}：${seatText}`;
+    if (action.stepId === "mechanical_guard") return action.skipped ? "机械守卫空守" : `机械守卫守 ${seatText}`;
+    if (action.stepId === "mechanical_poison") return action.skipped ? "机械狼不使用毒药" : `机械狼毒 ${seatText}`;
+    if (action.stepId === "mechanical_check") return `机械狼查验 ${seatText}${seats[0] ? `（${roleNameAtSeat(room, seats[0])}）` : ""}`;
+    if (action.stepId === "mechanical_kill") return action.skipped ? "机械狼空刀" : `机械狼技能刀 ${seatText}`;
     if (action.stepId === "guard_guard") return action.skipped ? "守卫空守" : `守卫守 ${seatText}`;
     if (action.stepId === "poisoner_poison") return action.skipped ? "毒师不用毒" : `毒师毒 ${seatText}`;
     if (action.stepId === "dreamer_dream") return `摄梦人摄 ${seatText}`;
@@ -1412,6 +1533,9 @@
     const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && !daybreakRecorded;
     const canRunDayActions = room.phase === "DAY" && isJudge;
     const pendingExileResult = room.pendingExileResult || null;
+    const pendingDelayedDeaths = (room.pendingDelayedDeaths || []).filter((item) => item.day === room.night);
+    const pendingDeathSkills = (room.pendingDeathSkills || []).filter((item) => item.day === room.night);
+    const publicReveals = IS_REMOTE ? room.publicReveals || [] : (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot");
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
     const judgeNextStep = getJudgeNextStep(room);
@@ -1425,10 +1549,12 @@
       !gameOver && isJudge && sheriffBadge.holderSeat ? '<button class="button" data-action="view" data-view="badge">处理警徽</button>' : "",
       canRecordDaybreakDeaths ? '<button class="button" data-action="view" data-view="death">记录天亮死亡</button>' : "",
       canRecordDaybreakDeaths && suggestedDeaths.length ? '<button class="button" data-action="use-suggested-deaths">带入建议死亡</button>' : "",
+      ...pendingDelayedDeaths.map((item) => `<button class="button danger" data-action="confirm-delayed-death" data-seat="${item.seat}">确认 ${item.seat}号发言结束死亡</button>`),
+      ...pendingDeathSkills.map((item) => `<div class="death-skill-action"><div class="notice">${item.seat}号可以发动死亡技能</div><select class="input" id="deathSkillTarget-${item.seat}"><option value="0">选择开枪目标</option>${(room.assignments || []).filter((assignment) => assignment.alive !== false && assignment.seat !== item.seat).map((assignment) => `<option value="${assignment.seat}">${assignment.seat}号</option>`).join("")}</select><button class="button danger" data-action="death-skill-submit" data-seat="${item.seat}">确认开枪</button><button class="button" data-action="death-skill-skip" data-seat="${item.seat}">不开枪</button></div>`),
       canRunDayActions && pendingExileResult ? '<button class="button" data-action="view" data-view="orderPrince">处理投票结果</button>' : "",
       canRunDayActions && !pendingExileResult ? `<button class="button" data-action="view" data-view="dayVote">${room.orderPrinceRevotePending ? "记录回溯重投" : "记录放逐投票"}</button>` : "",
       canRunDayActions && !pendingExileResult ? '<button class="button primary" data-action="view" data-view="exile">手动记录放逐</button>' : "",
-      canRunDayActions && !pendingExileResult && !room.orderPrinceRevotePending ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
+      canRunDayActions && !pendingExileResult && !room.orderPrinceRevotePending && !room.pendingNightResolution && !pendingDelayedDeaths.length && !pendingDeathSkills.length ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.phase === "NIGHT" && isJudge ? '<button class="button" data-action="view" data-view="night">继续夜间流程</button>' : "",
       room.phase === "WAITING" && isJudge ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
@@ -1501,6 +1627,7 @@
         <div class="label">白天放逐</div>
         <div class="body-text">${latestExile ? `第 ${latestExile.day} 天：${latestExile.noExile ? "无人出局" : `${latestExile.seat}号出局`}` : "暂未记录"}</div>
         <div class="notice">投票状态：${dayVote ? dayVote.exiledSeat ? `${dayVote.exiledSeat}号出局` : dayVote.noExile ? "无人出局" : dayVote.pkSeats && dayVote.pkSeats.length ? `${formatSeatList(dayVote.pkSeats)} 平票 PK` : "未产生结果" : "暂未投票"}</div>
+        ${publicReveals.length ? `<div class="notice">公开身份：${publicReveals.map((item) => `${item.seat}号白痴`).join("、")}</div>` : ""}
       </section>
       ${gameOver ? '<section class="panel"><div class="value">游戏已结束</div><div class="notice">可以进入复盘查看身份和操作记录。</div></section>' : ""}
       <section class="seat-grid">
@@ -1582,6 +1709,12 @@
     const treasureCards = treasure && treasure.abilityState && treasure.abilityState.treasureCards
       ? treasure.abilityState.treasureCards.map((roleId) => getRole(roleId))
       : [];
+    const activeTreasureRoleId = currentTreasureCard(room);
+    const activeTreasureRole = activeTreasureRoleId ? getRole(activeTreasureRoleId) : null;
+    const treasurePoisonUsed = (room.nightActions || []).some((action) => action.stepId === "treasure_skill" && action.cardRoleId === "poisoner" && !action.skipped);
+    const treasureWolfEligible = !(room.assignments || []).some((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId));
+    const treasureSkillCanTarget = !activeTreasureRoleId || ["spirit_medium", "dreamer"].includes(activeTreasureRoleId) || (activeTreasureRoleId === "poisoner" && !treasurePoisonUsed) || (activeTreasureRoleId === "wolf" && treasureWolfEligible);
+    const treasureSkillRequired = ["spirit_medium", "dreamer"].includes(activeTreasureRoleId);
     const currentNightActions = (room.nightActions || []).filter((action) => action.night === room.night);
     const suggestedDeaths = calculateSuggestedDeaths(room, room.night);
     const witchAntidoteTarget = step && ["witch_action", "witch_antidote"].includes(step.id) ? getWitchAntidoteTarget(room) : 0;
@@ -1655,7 +1788,7 @@
       ` : step.needsCard ? `
         <section class="panel">
           <div class="label">选择盗宝牌</div>
-          ${room && room.boardId === "treasure_master" && room.night >= 2 ? `<div class="notice">你的带刀状态为：有刀</div>` : room && room.boardId === "treasure_master" ? `<div class="notice">你的带刀状态为：无刀（首夜狼人无法刀人）</div>` : ""}
+          ${room && room.boardId === "treasure_master" ? `<div class="notice">狼人同伴：${treasureWolfEligible ? "已全部出局，选择狼人牌时可发动技能刀" : "仍有存活，狼人牌不能发动技能刀"}</div>` : ""}
           <div class="card-options">
             ${treasureCards.map((card) => `<button class="card-option" data-action="night-card" data-role="${card.id}">${card.name}</button>`).join("")}
           </div>
@@ -1665,12 +1798,14 @@
           <div class="label">${step.targetCount === 1 ? "选择目标" : `选择 ${step.targetCount} 个目标`}</div>
           <section class="seat-grid">
             ${room.seats.map((seat) => {
-              const allowed = !Array.isArray(step.allowedSeats) || step.allowedSeats.includes(seat.seat);
+              const alive = (room.assignments || []).some((assignment) => assignment.seat === seat.seat && assignment.alive !== false);
+              const allowed = alive && (!Array.isArray(step.allowedSeats) || step.allowedSeats.includes(seat.seat)) && (step.id !== "treasure_skill" || treasureSkillCanTarget);
               return `<button class="seat ${allowed ? "" : "unavailable"}" data-action="night-seat" data-seat="${seat.seat}" ${allowed ? "" : "disabled"}>${seat.seat}号</button>`;
             }).join("")}
           </section>
           ${step.id === "dancer_dance" ? `<div class="notice">每名玩家只能进入一次舞池；当前可选：${formatSeatList(step.allowedSeats || [])}</div>` : ""}
           ${["trickster_swap", "magician_swap"].includes(step.id) ? `<div class="notice">每个号码整局只能被该角色交换一次；当前可选：${formatSeatList(step.allowedSeats || [])}</div>` : ""}
+          ${step.id === "treasure_skill" ? `<div class="notice">当前盗宝牌：${activeTreasureRole ? activeTreasureRole.name : "未选择"}${treasureSkillCanTarget ? "" : "，本夜没有可发动的主动技能，请选择不发动"}</div>` : ""}
         </section>
         ${getNightResultHtml(room, step, [])}
       `}
@@ -1694,7 +1829,7 @@
             ` : '<button class="button primary" data-action="night-witch-submit" data-use-poison="false">确认女巫操作</button>'}
           ` : step.id === "siren_wind" ? "" : `
             <button class="button primary" data-action="night-submit">${nightSubmitLabel}</button>
-            ${step.allowSkip ? `<button class="button" data-action="night-skip">${nightSkipLabel}</button>` : ""}
+            ${step.allowSkip && !(step.id === "treasure_skill" && treasureSkillRequired) ? `<button class="button" data-action="night-skip">${nightSkipLabel}</button>` : ""}
           `}
           ${currentNightActions.length ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
           <button class="button" data-action="view" data-view="room">返回房间</button>
@@ -2196,6 +2331,9 @@
           render();
           return;
         }
+        if (room.pendingNightResolution) throw new Error("请先确认天亮死亡名单");
+        if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) throw new Error("请先处理蒙面人的延迟死亡");
+        if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) throw new Error("请先处理死亡技能");
         room.night = (room.night || 0) + 1;
         room.phase = "NIGHT";
         room.lastWindDirection = room.windDirection || "calm";
@@ -2373,7 +2511,8 @@
       const skipped = action === "night-skip";
       let targetSeats = Array.from(app.querySelectorAll(".seat.selected")).map((item) => Number(item.dataset.seat));
       const selectedCard = app.querySelector(".card-option.selected");
-      const cardRoleId = selectedCard ? selectedCard.dataset.role : "";
+      let cardRoleId = selectedCard ? selectedCard.dataset.role : "";
+      if (step.id === "treasure_skill") cardRoleId = currentTreasureCard(room);
       if (step.id === "witch_antidote" && !skipped) {
         const savedSeat = getWitchAntidoteTarget(room);
         if (!savedSeat) {
@@ -2391,7 +2530,7 @@
         window.alert("需要选择一张盗宝牌");
         return;
       }
-      const ruleError = validateNightAction(room, step, targetSeats, skipped);
+      const ruleError = validateNightAction(room, step, targetSeats, skipped, cardRoleId);
       if (ruleError) {
         window.alert(ruleError);
         return;
@@ -2446,6 +2585,7 @@
           return;
         }
         room.phase = "DAY";
+        room.pendingNightResolution = window.NightResolution.calculateNightResolution(room, room.night);
         writeLog(room, "NIGHT_FINISHED", { night: room.night });
         const locSug = calculateSuggestedDeaths(room, room.night);
         state.deathDraftSeats = locSug.map((item) => item.seat);
@@ -2614,11 +2754,21 @@
           render();
           return;
         }
+        const delayedDeaths = (room.pendingNightResolution && room.pendingNightResolution.delayedDeaths || []).map((item) => ({
+          ...item,
+          day: room.night
+        }));
+        room.pendingDelayedDeaths = [
+          ...(room.pendingDelayedDeaths || []).filter((item) => item.day !== room.night),
+          ...delayedDeaths
+        ];
+        room.pendingNightResolution = null;
         seats.forEach((seat) => {
           const assignment = room.assignments.find((item) => item.seat === seat);
           if (assignment) assignment.alive = false;
           trackCaptainDeath(room, seat);
         });
+        queueDeathSkills(room, seats, "DAYBREAK", reasonsBySeat);
         const record = { day: room.night, phase: "DAYBREAK", seats, reasons: reasonsBySeat, createdAt: Date.now() };
         room.deathRecords = room.deathRecords || [];
         room.deathRecords.push(record);
@@ -2626,6 +2776,68 @@
         state.deathDraftSeats = [];
         state.deathDraftReasons = {};
         state.view = "room";
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "confirm-delayed-death" && room) {
+      const seat = Number(target.dataset.seat || 0);
+      try {
+        if (IS_REMOTE) {
+          await remotePost("delayed-death", { seat });
+          saveState();
+          render();
+          return;
+        }
+        const pending = (room.pendingDelayedDeaths || []).find((item) => item.day === room.night && item.seat === seat);
+        if (!pending) throw new Error("没有该玩家的待处理延迟死亡");
+        const assignment = room.assignments.find((item) => item.seat === seat);
+        if (assignment) assignment.alive = false;
+        trackCaptainDeath(room, seat);
+        room.pendingDelayedDeaths = (room.pendingDelayedDeaths || []).filter((item) => !(item.day === room.night && item.seat === seat));
+        const record = { day: room.night, phase: "DELAYED", seats: [seat], reasons: { [seat]: ["蒙面延迟死亡"] }, createdAt: Date.now() };
+        room.deathRecords = room.deathRecords || [];
+        room.deathRecords.push(record);
+        writeLog(room, "DELAYED_DEATH_CONFIRMED", record);
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if ((action === "death-skill-submit" || action === "death-skill-skip") && room) {
+      const seat = Number(target.dataset.seat || 0);
+      const targetSeat = action === "death-skill-skip" ? 0 : Number(app.querySelector(`#deathSkillTarget-${seat}`)?.value || 0);
+      if (action === "death-skill-submit" && !targetSeat) {
+        window.alert("请选择开枪目标");
+        return;
+      }
+      try {
+        if (IS_REMOTE) {
+          await remotePost("death-skill", { seat, targetSeat });
+          saveState();
+          render();
+          return;
+        }
+        const pending = (room.pendingDeathSkills || []).find((item) => item.day === room.night && item.seat === seat);
+        if (!pending) throw new Error("没有该玩家待处理的死亡技能");
+        if (targetSeat) {
+          const targetAssignment = room.assignments.find((item) => item.seat === targetSeat);
+          if (!targetAssignment || targetAssignment.alive === false) throw new Error("开枪目标必须是存活玩家");
+          targetAssignment.alive = false;
+          trackCaptainDeath(room, targetSeat);
+          room.deathRecords.push({ day: room.night, phase: "SHOT", seats: [targetSeat], reasons: { [targetSeat]: [`${seat}号死亡技能`] }, createdAt: Date.now() });
+        }
+        room.pendingDeathSkills = (room.pendingDeathSkills || []).filter((item) => !(item.day === room.night && item.seat === seat));
+        const record = [...(room.deathSkillRecords || [])].reverse().find((item) => item.day === room.night && item.seat === seat && !item.resolved);
+        if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, resolvedAt: Date.now() });
+        writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat });
         saveState();
         render();
       } catch (error) {
@@ -2734,8 +2946,12 @@
         }
         if (!noExile) {
           const assignment = room.assignments.find((item) => item.seat === seat);
-          if (assignment) assignment.alive = false;
+          if (assignment) {
+            assignment.alive = false;
+            if (assignment.roleId === "idiot") assignment.revealed = true;
+          }
           trackCaptainDeath(room, seat);
+          queueDeathSkills(room, [seat], "EXILE");
         }
         const record = { day: room.night, seat, noExile, createdAt: Date.now() };
         room.exileRecords = room.exileRecords || [];

@@ -82,6 +82,9 @@ test("dawn voyage preserves wind rules across undo, witch action and daybreak", 
   assert.equal(playerRoom.windDirection, "");
   assert.equal(playerRoom.boardedSeat, 0);
 
+  assert.equal((await post(`${roomPath}/sheriff-candidates`, { ...auth, seats: [1] })).status, 200);
+  assert.equal((await post(`${roomPath}/sheriff-withdraw`, { ...auth, seats: [1] })).status, 200);
+  assert.equal((await post(`${roomPath}/death-record`, { ...auth, seats: [] })).status, 200);
   const secondNight = await post(`${roomPath}/night-start`, auth);
   assert.equal(secondNight.status, 200);
   assert.equal((await post(`${roomPath}/night-action`, { ...auth, windDirection: "headwind", targetSeats: [] })).status, 200);

@@ -416,6 +416,23 @@ select {
   grid-column: span 2;
 }
 
+.death-skill-action {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.death-skill-action .notice {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.death-skill-action .button.danger {
+  grid-column: auto;
+}
+
 .danger-zone {
   border-color: rgba(143, 36, 26, 0.24);
 }
@@ -717,6 +734,13 @@ select {
 }
 
 @media (max-width: 390px) {
+  .death-skill-action {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .death-skill-action .input {
+    grid-column: 1 / -1;
+  }
   .app {
     padding-left: 14px;
     padding-right: 14px;
