@@ -253,4 +253,10 @@ test("death skills enforce poison, last-god and last-wolf restrictions", () => {
   room.assignments[3].alive = false;
   assert.match(getDeathSkillResolution(room, { seat: 1, phase: "EXILE" }).reason, /最后一神/);
   assert.match(getDeathSkillResolution(room, { seat: 3, phase: "EXILE" }).reason, /最后一狼/);
+
+  room.assignments = [
+    { seat: 1, roleId: "hunter", camp: "GOOD", alive: false },
+    { seat: 2, roleId: "mask", camp: "WOLF", alive: true }
+  ];
+  assert.match(getDeathSkillResolution(room, { seat: 1, phase: "EXILE" }).reason, /最后一神/);
 });

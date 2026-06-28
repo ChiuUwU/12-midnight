@@ -168,7 +168,7 @@
   }
 
   const GOD_ROLE_IDS = new Set([
-    "seer", "witch", "hunter", "idiot", "guard", "dancer", "mask",
+    "seer", "witch", "hunter", "idiot", "guard", "dancer",
     "spirit_medium", "poisoner", "dreamer", "magician", "order_prince",
     "captain", "masked_man"
   ]);
