@@ -1540,6 +1540,7 @@
     }
     const board = getBoard(room.boardId);
     const mySeat = room.seats.find((seat) => seat.userId === state.currentUserId);
+    const myAssignment = mySeat ? (room.assignments || []).find((item) => item.seat === mySeat.seat) : null;
     const occupiedCount = room.seats.filter((seat) => seat.occupied).length;
     const isJudge = !IS_REMOTE || room.isJudge;
     const isController = Boolean(room.isController);
@@ -1570,6 +1571,9 @@
     const publicReveals = IS_REMOTE ? room.publicReveals || [] : (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot");
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
+    const canSelfDestruct = IS_REMOTE && room.mode === "SYSTEM" && !canControl && room.phase === "DAY"
+      && myAssignment?.alive !== false && myAssignment?.roleId !== "mixed_blood"
+      && (myAssignment?.currentCamp || myAssignment?.camp) === "WOLF";
     const judgeNextStep = getJudgeNextStep(room);
     const mainActions = [
       room.phase === "WAITING" ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : "",
@@ -1602,6 +1606,7 @@
       IS_REMOTE ? '<button class="button" data-action="refresh-room">刷新房间</button>' : ""
     ];
     const dangerActions = [
+      canSelfDestruct ? '<button class="button danger" data-action="wolf-self-destruct">狼人自爆</button>' : "",
       !gameOver && room.phase !== "WAITING" && canControl ? '<button class="button danger" data-action="game-end">结束游戏</button>' : "",
       `<button class="button danger" data-action="reset">${IS_REMOTE ? "退出当前房间" : "重置本地数据"}</button>`
     ];
@@ -1663,7 +1668,7 @@
         <div class="label">白天放逐</div>
         <div class="body-text">${latestExile ? `第 ${latestExile.day} 天：${latestExile.noExile ? "无人出局" : `${latestExile.seat}号出局`}` : "暂未记录"}</div>
         <div class="notice">投票状态：${dayVote ? dayVote.exiledSeat ? `${dayVote.exiledSeat}号出局` : dayVote.noExile ? "无人出局" : dayVote.pkSeats && dayVote.pkSeats.length ? `${formatSeatList(dayVote.pkSeats)} 平票 PK` : "未产生结果" : "暂未投票"}</div>
-        ${publicReveals.length ? `<div class="notice">公开身份：${publicReveals.map((item) => `${item.seat}号白痴`).join("、")}</div>` : ""}
+        ${publicReveals.length ? `<div class="notice">公开身份：${publicReveals.map((item) => `${item.seat}号${getRole(item.roleId)?.name || item.roleId}`).join("、")}</div>` : ""}
       </section>
       ${gameOver ? `<section class="panel"><div class="value">${gameOutcomeText}</div><div class="notice">可以进入复盘查看身份和操作记录。</div></section>` : ""}
       <section class="seat-grid">
@@ -2374,6 +2379,18 @@
         }
         writeLog(room, "SHERIFF_SELF_WITHDRAWN", { seat: mySeat.seat });
         saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "wolf-self-destruct" && room) {
+      if (!window.confirm("确认自爆并立即结束白天吗？")) return;
+      try {
+        await remotePost("wolf-self-destruct");
+        state.view = "room";
         render();
       } catch (error) {
         window.alert(error.message);

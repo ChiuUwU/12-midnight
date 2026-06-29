@@ -723,7 +723,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     pendingDelayedDeaths: judge ? room.pendingDelayedDeaths || [] : [],
     pendingDeathSkills: judge ? room.pendingDeathSkills || [] : [],
     deathSkillRecords: judge ? room.deathSkillRecords || [] : [],
-    publicReveals: (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot").map((assignment) => ({ seat: assignment.seat, roleId: assignment.roleId })),
+    publicReveals: (room.assignments || []).filter((assignment) => assignment.revealed && (assignment.roleId === "idiot" || assignment.publiclyRevealed)).map((assignment) => ({ seat: assignment.seat, roleId: assignment.roleId })),
     exileRecords: room.exileRecords || [],
     windDirection: judge ? room.windDirection || "calm" : "",
     lastWindDirection: judge ? room.lastWindDirection || "calm" : "",
@@ -779,6 +779,31 @@ function maybeCompleteSystemGame(room) {
   const text = result === "GOOD_WIN" ? "游戏结束，好人阵营获胜。" : "游戏结束，狼人阵营获胜。";
   addPublicAnnouncement(room, text);
   return room.gameOutcome;
+}
+
+function beginNight(room) {
+  room.night += 1;
+  room.phase = "NIGHT";
+  room.lastWindDirection = room.windDirection || "calm";
+  room.boardedSeat = 0;
+  room.captainAliveAtDawn = (room.assignments || []).some((item) => item.roleId === "captain" && item.alive !== false);
+  room.captainDiedLastDay = false;
+  room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
+  room.currentNightStepIndex = 0;
+  room.pendingNightResolution = null;
+  writeLog(room, "NIGHT_STARTED", { night: room.night });
+}
+
+function continueAfterSystemSelfDestruct(room) {
+  if (!room.pendingSystemNightAfterSelfDestruct) return false;
+  if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return false;
+  if (maybeCompleteSystemGame(room)) {
+    room.pendingSystemNightAfterSelfDestruct = false;
+    return true;
+  }
+  room.pendingSystemNightAfterSelfDestruct = false;
+  beginNight(room);
+  return true;
 }
 
 function parseRoute(url) {
@@ -1047,16 +1072,7 @@ async function handleRoomAction(request, env, route) {
     if (room.pendingNightResolution) return error(400, "请先确认天亮死亡名单");
     if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return error(400, "请先处理蒙面人的延迟死亡");
     if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return error(400, "请先处理死亡技能");
-    room.night += 1;
-    room.phase = "NIGHT";
-    room.lastWindDirection = room.windDirection || "calm";
-    room.boardedSeat = 0;
-    room.captainAliveAtDawn = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
-    room.captainDiedLastDay = false;
-    room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
-    room.currentNightStepIndex = 0;
-    room.pendingNightResolution = null;
-    writeLog(room, "NIGHT_STARTED", { night: room.night });
+    beginNight(room);
   } else if (route.action === "night-action") {
     if (room.phase !== "NIGHT") return error(400, "当前不在夜晚阶段");
     const step = room.currentNightSteps[room.currentNightStepIndex];
@@ -1336,7 +1352,7 @@ async function handleRoomAction(request, env, route) {
     if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, resolvedAt: Date.now() });
     writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat });
     if (room.mode === "SYSTEM" && targetSeat) addPublicAnnouncement(room, `${seat}号玩家发动技能，${targetSeat}号玩家死亡。`);
-    maybeCompleteSystemGame(room);
+    if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
   } else if (route.action === "day-vote") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录放逐投票");
     if (room.phase !== "DAY") return error(400, "当前阶段不能记录放逐投票");
@@ -1374,6 +1390,26 @@ async function handleRoomAction(request, env, route) {
       if (record.exiledSeat || record.noExile) finalizeDayVote(room, record);
       writeLog(room, "ORDER_PRINCE_DECLINED", { day: room.night });
     }
+  } else if (route.action === "wolf-self-destruct") {
+    if (room.mode !== "SYSTEM") return error(400, "自爆入口仅用于无法官模式");
+    if (room.phase !== "DAY") return error(400, "只能在白天阶段自爆");
+    if (room.pendingNightResolution || (room.pendingDelayedDeaths || []).some((item) => item.day === room.night) || (room.pendingDeathSkills || []).some((item) => item.day === room.night)) return error(400, "请先完成当前死亡结算");
+    if (room.systemDayOutcomeRecordedDay === room.night) return error(400, "本日出局结果已经记录");
+    const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
+    const assignment = room.assignments.find((item) => item.seat === ownSeat);
+    if (!assignment || assignment.alive === false || assignment.roleId === "mixed_blood" || (assignment.currentCamp || assignment.camp) !== "WOLF") return error(403, "只有存活的狼人阵营玩家可以自爆");
+    assignment.alive = false;
+    assignment.revealed = true;
+    assignment.publiclyRevealed = true;
+    const record = { day: room.night, phase: "SELF_DESTRUCT", seats: [ownSeat], reasons: { [String(ownSeat)]: ["狼人自爆"] }, createdAt: Date.now() };
+    room.deathRecords.push(record);
+    queueDeathSkills(room, [ownSeat], "SELF_DESTRUCT", record.reasons);
+    room.systemDayOutcomeRecordedDay = room.night;
+    room.pendingSystemNightAfterSelfDestruct = true;
+    writeLog(room, "WOLF_SELF_DESTRUCTED", { seat: ownSeat, roleId: assignment.roleId });
+    const pendingSkill = (room.pendingDeathSkills || []).some((item) => item.day === room.night && item.seat === ownSeat);
+    addPublicAnnouncement(room, pendingSkill ? `${ownSeat}号玩家自爆，等待其发动死亡技能。` : `${ownSeat}号玩家自爆，天黑请闭眼。`);
+    continueAfterSystemSelfDestruct(room);
   } else if (route.action === "exile-record") {
     if (!isController(room, judgeToken)) return error(403, "只有控制设备可以记录放逐");
     if (room.phase !== "DAY") return error(400, "当前阶段不能记录放逐");

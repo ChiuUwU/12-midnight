@@ -215,7 +215,9 @@
     const normalizedReasons = Array.isArray(reasons) ? reasons.map(String) : [];
     const poisonDeath = normalizedReasons.some((reason) => reason.includes("毒"));
     const knifeDeath = normalizedReasons.some((reason) => reason === "狼刀" || reason === "同守同救" || reason.includes("技能刀"));
-    const triggerAllowed = phase === "EXILE" || (phase === "DAYBREAK" && knifeDeath);
+    const triggerAllowed = phase === "EXILE"
+      || (phase === "DAYBREAK" && knifeDeath)
+      || (phase === "SELF_DESTRUCT" && skillRoleId !== "hunter");
     if (poisonDeath) return { seat, skillRoleId, eligible: false, reason: "被毒杀不能发动死亡技能", day };
     if (!triggerAllowed) return { seat, skillRoleId, eligible: false, reason: "当前出局方式不能发动死亡技能", day };
 

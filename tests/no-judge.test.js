@@ -279,6 +279,40 @@ test("system mode automatically ends after the final wolf is exiled", async () =
   }
 });
 
+test("a system-mode wolf can self-destruct and immediately end the day", async () => {
+  const game = await createSystemRoom("wolf-self-destruct");
+  const wolf = game.views.find((item) => item.room.assignments[0].roleId === "wolf");
+  const good = game.views.find((item) => item.room.assignments[0].camp === "GOOD");
+  assert.ok(wolf);
+  assert.ok(good);
+
+  assert.equal((await post(`/api/rooms/${game.id}/night-start`, game.controllerAuth)).status, 200);
+  while (true) {
+    const controllerRoom = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+    if (controllerRoom.systemNight.complete) break;
+    const actor = await findSystemActor(game.id, game.players);
+    assert.ok(actor);
+    let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+    if (actor.step.id === "wolves_kill") payload.skipped = true;
+    else if (actor.step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
+    else if (actor.step.id === "mixed_blood_model") payload.targetSeats = [wolf.room.assignments[0].seat];
+    else if (actor.step.targetCount > 0) payload.targetSeats = [actor.room.aliveSeats[0]];
+    assert.equal((await post(`/api/rooms/${game.id}/night-action`, payload)).status, 200);
+  }
+  assert.equal((await post(`/api/rooms/${game.id}/night-finish`, game.controllerAuth)).status, 200);
+  assert.equal((await post(`/api/rooms/${game.id}/system-publish-daybreak`, game.controllerAuth)).status, 200);
+
+  assert.equal((await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: good.player.clientId })).status, 403);
+  const exploded = await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: wolf.player.clientId });
+  assert.equal(exploded.status, 200);
+  assert.equal(exploded.body.room.phase, "NIGHT");
+  assert.equal(exploded.body.room.night, 2);
+  assert.ok(exploded.body.room.publicReveals.some((item) => item.seat === wolf.room.assignments[0].seat && item.roleId === "wolf"));
+  assert.match(exploded.body.room.latestPublicAnnouncement.text, /自爆/);
+  const observer = await getRoom(game.id, "self-destruct-observer");
+  assert.equal(observer.aliveSeats.includes(wolf.room.assignments[0].seat), false);
+});
+
 test("all complex boards can complete two system-guided nights", async () => {
   const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage"];
   const expectedSecondNightSteps = {
