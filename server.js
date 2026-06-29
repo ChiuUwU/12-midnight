@@ -460,7 +460,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     pendingDelayedDeaths: judge ? room.pendingDelayedDeaths || [] : [],
     pendingDeathSkills: judge ? room.pendingDeathSkills || [] : [],
     deathSkillRecords: judge ? room.deathSkillRecords || [] : [],
-    publicReveals: (room.assignments || []).filter((assignment) => assignment.revealed && (assignment.roleId === "idiot" || assignment.publiclyRevealed)).map((assignment) => ({ seat: assignment.seat, roleId: assignment.roleId })),
+    publicReveals: (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot").map((assignment) => ({ seat: assignment.seat, roleId: assignment.roleId })),
     exileRecords: room.exileRecords || [],
     windDirection: judge ? room.windDirection || "calm" : "",
     lastWindDirection: judge ? room.lastWindDirection || "calm" : "",
@@ -1073,8 +1073,6 @@ async function handleApi(request, response, url) {
       return sendError(response, 403, "只有存活的狼人阵营玩家可以自爆");
     }
     assignment.alive = false;
-    assignment.revealed = true;
-    assignment.publiclyRevealed = true;
     const record = { day: room.night, phase: "SELF_DESTRUCT", seats: [ownSeat], reasons: { [String(ownSeat)]: ["狼人自爆"] }, createdAt: Date.now() };
     room.deathRecords.push(record);
     queueDeathSkills(room, [ownSeat], "SELF_DESTRUCT", record.reasons);

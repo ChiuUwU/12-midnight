@@ -307,7 +307,7 @@ test("a system-mode wolf can self-destruct and immediately end the day", async (
   assert.equal(exploded.status, 200);
   assert.equal(exploded.body.room.phase, "NIGHT");
   assert.equal(exploded.body.room.night, 2);
-  assert.ok(exploded.body.room.publicReveals.some((item) => item.seat === wolf.room.assignments[0].seat && item.roleId === "wolf"));
+  assert.equal(exploded.body.room.publicReveals.some((item) => item.seat === wolf.room.assignments[0].seat), false);
   assert.match(exploded.body.room.latestPublicAnnouncement.text, /自爆/);
   const observer = await getRoom(game.id, "self-destruct-observer");
   assert.equal(observer.aliveSeats.includes(wolf.room.assignments[0].seat), false);
