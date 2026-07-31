@@ -9,6 +9,7 @@
   const HISTORY_LIMIT = 10;
   const DEFAULT_CANDIDATE_COUNT = 2000;
   const TEMPERATURE = 3;
+  const FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT = 8;
   const KEY_ROLE_PAIRS = {
     masquerade: ["dancer", "mask"],
     realm_of_trickery: ["magician", "trickster"],
@@ -75,6 +76,28 @@
     return (Array.isArray(history) ? history : []).slice(-HISTORY_LIMIT).filter((game) =>
       game && Array.isArray(game.assignments) && game.assignments.length === PLAYER_COUNT
     );
+  }
+
+  function ringNeighbors(seat) {
+    const normalized = Number(seat);
+    return [normalized === 1 ? PLAYER_COUNT : normalized - 1, normalized === PLAYER_COUNT ? 1 : normalized + 1];
+  }
+
+  // “唯邻是从”允许任意狼座连坐；这里只轻度偏好三狼相邻范围内至少有两名不同神职。
+  function getFollowNeighborStats(assignments) {
+    const wolfSeats = assignments.filter((assignment) => assignment.camp === "WOLF").map((assignment) => assignment.seat);
+    const adjacentSeats = new Set(wolfSeats.flatMap(ringNeighbors));
+    wolfSeats.forEach((seat) => adjacentSeats.delete(seat));
+    const godSeats = assignments
+      .filter((assignment) => adjacentSeats.has(assignment.seat) && assignment.camp === "GOOD" && assignment.roleId !== "villager")
+      .map((assignment) => assignment.seat)
+      .sort((left, right) => left - right);
+    return {
+      wolfSeats: wolfSeats.slice().sort((left, right) => left - right),
+      adjacentSeats: [...adjacentSeats].sort((left, right) => left - right),
+      godSeats,
+      adjacentGodCount: godSeats.length
+    };
   }
 
   function createContext(boardId, history, randomInt, wolfCount) {
@@ -181,9 +204,15 @@
       if (recentCount >= 3) specialPenalty += 8;
     }
 
+    const followNeighborStats = boardId === "follow_neighbor" ? getFollowNeighborStats(assignments) : null;
+    const adjacentGodPenalty = followNeighborStats
+      ? FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT * Math.pow(Math.max(0, 2 - followNeighborStats.adjacentGodCount), 2)
+      : 0;
+
     return {
-      totalPenalty: historyPenalty + strengthPenalty + layoutPenalty + pairDriftPenalty + keyRolePenalty + specialPenalty,
-      components: { historyPenalty, strengthPenalty, layoutPenalty, pairDriftPenalty, keyRolePenalty, specialPenalty },
+      totalPenalty: historyPenalty + strengthPenalty + layoutPenalty + pairDriftPenalty + keyRolePenalty + specialPenalty + adjacentGodPenalty,
+      components: { historyPenalty, strengthPenalty, layoutPenalty, pairDriftPenalty, keyRolePenalty, specialPenalty, adjacentGodPenalty },
+      followNeighbor: followNeighborStats,
       averages: { wolf: wolfAverage, good: goodAverage, god: godAverage }
     };
   }
@@ -236,7 +265,8 @@
         keyRoleMode: context.keyRoleMode.type,
         totalPenalty: selected.score.totalPenalty,
         components: selected.score.components,
-        averages: selected.score.averages
+        averages: selected.score.averages,
+        followNeighbor: selected.score.followNeighbor
       }
     };
   }
@@ -244,7 +274,8 @@
   return {
     createBalancedDeal,
     createHistoryEntry,
+    getFollowNeighborStats,
     scoreCandidate,
-    constants: { HISTORY_LIMIT, DEFAULT_CANDIDATE_COUNT, TEMPERATURE }
+    constants: { HISTORY_LIMIT, DEFAULT_CANDIDATE_COUNT, TEMPERATURE, FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT }
   };
 });

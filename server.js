@@ -11,6 +11,9 @@ const PORT = Number(process.env.PORT || 5173);
 const HOST = process.env.HOST || "0.0.0.0";
 const WEB_ROOT = path.join(__dirname, "web");
 const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
+const SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS = Math.max(0, Number(process.env.SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS || 10000));
+const JUDGE_CLAIM_MAX_FAILURES = 5;
+const JUDGE_CLAIM_LOCK_MS = 5 * 60 * 1000;
 const rooms = new Map();
 const dealHistories = new Map();
 
@@ -33,7 +36,7 @@ function createRoomId() {
 }
 
 function createJudgeCode() {
-  return String(Math.floor(1000 + Math.random() * 9000));
+  return String(crypto.randomInt(0, 10000)).padStart(4, "0");
 }
 
 function writeLog(room, type, payload) {
@@ -174,10 +177,28 @@ function shouldIncludeNightStep(room, step) {
   return assignments.some((assignment) => assignment.alive !== false && assignment.roleId === step.actor);
 }
 
+function getFollowNeighborPuppetSeats(room) {
+  const wolves = (room.assignments || []).filter((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId));
+  const wolfSeats = new Set(wolves.map((assignment) => assignment.seat));
+  const candidates = new Set();
+  wolves.forEach((assignment) => {
+    candidates.add(assignment.seat === 1 ? 12 : assignment.seat - 1);
+    candidates.add(assignment.seat === 12 ? 1 : assignment.seat + 1);
+  });
+  return [...candidates].filter((seat) => !wolfSeats.has(seat) && (room.assignments || []).some((assignment) => assignment.seat === seat && assignment.alive !== false)).sort((left, right) => left - right);
+}
+
 function createNightSteps(boardId, night, room = null) {
   const firstNight = night === 1;
   const common = [];
-  if (boardId === "pre_witch_hunter_idiot_mixed") {
+  if (boardId === "follow_neighbor") {
+    const witchStep = createWitchStep(room);
+    common.push({ id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true });
+    if (firstNight) common.push({ id: "puppet_select", actor: "wolf_team", label: "狼人和狼王选择傀儡目标", targetCount: 1, allowSkip: false, allowedSeats: getFollowNeighborPuppetSeats(room) });
+    common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true });
+    if (witchStep) common.push(witchStep);
+    common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+  } else if (boardId === "pre_witch_hunter_idiot_mixed") {
     if (firstNight) common.push({ id: "mixed_blood_model", actor: "mixed_blood", label: "混血儿选择榜样", targetCount: 1, allowSkip: false });
     const witchStep = createWitchStep(room);
     common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
@@ -328,10 +349,52 @@ function isController(room, token) {
   return Boolean(token && token === room.judgeToken);
 }
 
+function judgeClaimLocked(room) {
+  return Number(room.judgeClaimLockedUntil || 0) > Date.now();
+}
+
+function recordJudgeClaimFailure(room) {
+  const failures = Number(room.judgeClaimFailures || 0) + 1;
+  room.judgeClaimFailures = failures;
+  if (failures >= JUDGE_CLAIM_MAX_FAILURES) {
+    room.judgeClaimFailures = 0;
+    room.judgeClaimLockedUntil = Date.now() + JUDGE_CLAIM_LOCK_MS;
+  }
+  writeLog(room, "JUDGE_CLAIM_REJECTED", { locked: judgeClaimLocked(room) });
+}
+
+function resetJudgeClaimFailures(room) {
+  room.judgeClaimFailures = 0;
+  room.judgeClaimLockedUntil = 0;
+}
+
+function normalizeSeatOccupancy(room) {
+  (room.seats || []).forEach((seat) => {
+    if (typeof seat.clientId === "string" && seat.clientId) {
+      seat.occupied = true;
+      return;
+    }
+    seat.clientId = "";
+    seat.nickname = "";
+    seat.occupied = false;
+  });
+}
+
+function isSystemAnnouncementReady(room) {
+  return room.mode !== "SYSTEM" || !room.systemAnnouncementNotBefore || Date.now() >= room.systemAnnouncementNotBefore;
+}
+
+function scheduleSystemAnnouncement(room) {
+  if (room.mode !== "SYSTEM") return;
+  const hasNextStep = (room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length;
+  room.systemAnnouncementNotBefore = hasNextStep ? Date.now() + SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS : 0;
+}
+
 function getWolfTeamRoleIds(boardId) {
   if (boardId === "realm_of_trickery") return ["wolf", "trickster"];
   if (boardId === "dawn_voyage") return ["wolf", "siren"];
   if (boardId === "treasure_master") return ["wolf", "wolf_king"];
+  if (boardId === "follow_neighbor") return ["wolf", "wolf_king"];
   return ["wolf"];
 }
 
@@ -347,7 +410,8 @@ function getSystemNightAccess(room, clientId, controller) {
   const step = room.currentNightSteps?.[stepIndex] || null;
   const seat = room.seats.find((item) => item.clientId === clientId);
   const assignment = seat ? room.assignments.find((item) => item.seat === seat.seat) : null;
-  const canAct = canAssignmentAct(room, step, assignment);
+  const announcementReady = isSystemAnnouncementReady(room);
+  const canAct = announcementReady && canAssignmentAct(room, step, assignment);
   const privateContext = {};
   if (canAct && step?.id === "witch_action" && step.antidoteAvailable) {
     const wolfAction = [...(room.nightActions || [])].reverse().find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
@@ -361,11 +425,12 @@ function getSystemNightAccess(room, clientId, controller) {
   return {
     canControl: controller,
     canAct,
+    announcementReady,
     stepIndex,
     stepCount: room.currentNightSteps?.length || 0,
     complete: !step,
     stepId: controller || canAct ? step?.id || "" : "",
-    announcement: controller || canAct ? step?.label || "夜间行动已完成" : "夜间流程进行中",
+    announcement: controller && !announcementReady ? "正在等待下一流程播报" : controller || canAct ? step?.label || "夜间行动已完成" : "夜间流程进行中",
     privateContext
   };
 }
@@ -379,7 +444,10 @@ function buildPrivateNightResult(room, step, action) {
   const assignment = (room.assignments || []).find((item) => item.seat === actualSeat);
   if (!assignment) return null;
   if (step.id === "seer_check") {
-    return { kind: "CAMP", seat: actualSeat, value: assignment.camp === "WOLF" ? "WOLF" : "GOOD" };
+    const puppetSeer = room.boardId === "follow_neighbor" && Number(room.puppetSeat) === Number((room.assignments || []).find((item) => item.roleId === "seer")?.seat);
+    const puppetTarget = room.boardId === "follow_neighbor" && Number(room.puppetSeat) === actualSeat;
+    const baseValue = assignment.camp === "WOLF" || puppetTarget ? "WOLF" : "GOOD";
+    return { kind: "CAMP", seat: actualSeat, value: puppetSeer ? (baseValue === "WOLF" ? "GOOD" : "WOLF") : baseValue };
   }
   if (step.id === "mask_check") {
     const dance = (room.nightActions || []).find((item) => item.night === room.night && item.stepId === "dancer_dance" && !item.skipped);
@@ -406,8 +474,9 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     ? room.assignments.find((assignment) => assignment.seat === mySeat.seat)
     : null;
   const seats = room.seats.map((seat) => ({
-    ...seat,
-    userId: seat.clientId
+    seat: seat.seat,
+    nickname: seat.nickname,
+    occupied: Boolean(seat.occupied && seat.clientId)
   }));
   const systemNight = getSystemNightAccess(room, clientId, controller);
   const activeStep = room.currentNightSteps?.[room.currentNightStepIndex || 0] || null;
@@ -439,7 +508,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     myDeathSkill: room.mode === "SYSTEM" ? myDeathSkill : null,
     latestPublicAnnouncement: (room.publicAnnouncements || []).at(-1) || null,
     gameOutcome: room.phase === "GAME_OVER" ? room.gameOutcome || null : null,
-    mySeat: mySeat ? { ...mySeat, userId: mySeat.clientId } : null,
+    mySeat: mySeat ? { seat: mySeat.seat, nickname: mySeat.nickname, occupied: true } : null,
     assignments: judge || revealAll ? room.assignments : myAssignment ? [myAssignment] : [],
     nightActions: judge || revealAll ? room.nightActions : [],
     currentNightSteps: judge ? room.currentNightSteps : systemSteps,
@@ -460,6 +529,7 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     pendingDelayedDeaths: judge ? room.pendingDelayedDeaths || [] : [],
     pendingDeathSkills: judge ? room.pendingDeathSkills || [] : [],
     deathSkillRecords: judge ? room.deathSkillRecords || [] : [],
+    puppetSeat: judge ? Number(room.puppetSeat || 0) : 0,
     publicReveals: (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot").map((assignment) => ({ seat: assignment.seat, roleId: assignment.roleId })),
     exileRecords: room.exileRecords || [],
     windDirection: judge ? room.windDirection || "calm" : "",
@@ -527,6 +597,7 @@ function beginNight(room) {
   room.captainDiedLastDay = false;
   room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
   room.currentNightStepIndex = 0;
+  room.systemAnnouncementNotBefore = 0;
   room.pendingNightResolution = null;
   writeLog(room, "NIGHT_STARTED", { night: room.night });
 }
@@ -685,8 +756,11 @@ async function handleApi(request, response, url) {
       balanceProfileId: body.balanceProfileId || body.clientId,
       judgeToken: crypto.randomBytes(18).toString("hex"),
       judgeCode: createJudgeCode(),
+      judgeClaimFailures: 0,
+      judgeClaimLockedUntil: 0,
       seats: createSeats(),
       assignments: [],
+      puppetSeat: 0,
       logs: [],
       nightActions: [],
       currentNightSteps: [],
@@ -713,6 +787,7 @@ async function handleApi(request, response, url) {
       boardedSeat: 0,
       captainDiedLastDay: false,
       captainAliveAtDawn: true,
+      systemAnnouncementNotBefore: 0,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -729,6 +804,7 @@ async function handleApi(request, response, url) {
   if (!target.room) return sendError(response, 404, "房间不存在");
 
   const room = target.room;
+  normalizeSeatOccupancy(room);
 
   if (request.method === "GET" && !target.action) {
     const clientId = url.searchParams.get("clientId") || "";
@@ -752,9 +828,13 @@ async function handleApi(request, response, url) {
 
   if (target.action === "judge-claim") {
     if (room.mode !== "JUDGE") return sendError(response, 400, "无法官房间没有法官席");
+    if (judgeClaimLocked(room)) return sendError(response, 429, "法官口令尝试过多，请 5 分钟后再试");
     if (String(body.judgeCode || "") !== room.judgeCode) {
+      recordJudgeClaimFailure(room);
+      if (judgeClaimLocked(room)) return sendError(response, 429, "法官口令尝试过多，请 5 分钟后再试");
       return sendError(response, 403, "法官口令错误");
     }
+    resetJudgeClaimFailures(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken: room.judgeToken }),
       judgeToken: room.judgeToken
@@ -762,12 +842,13 @@ async function handleApi(request, response, url) {
   }
 
   if (target.action === "seat") {
+    if (!clientId) return sendError(response, 400, "缺少玩家标识");
     if (room.phase !== "WAITING") return sendError(response, 400, "发牌后不能换座");
     if (isController(room, judgeToken)) return sendError(response, 400, "控制设备不占玩家座位");
     const seatNumber = Number(body.seat);
     const targetSeat = room.seats.find((seat) => seat.seat === seatNumber);
     if (!targetSeat) return sendError(response, 400, "座位不存在");
-    if (targetSeat.occupied && targetSeat.clientId !== clientId) {
+    if (targetSeat.occupied && targetSeat.clientId && targetSeat.clientId !== clientId) {
       return sendError(response, 400, "座位已被占用");
     }
     room.seats.forEach((seat) => {
@@ -805,7 +886,7 @@ async function handleApi(request, response, url) {
   if (target.action === "deal") {
     if (!isController(room, judgeToken)) return sendError(response, 403, "只有控制设备可以发牌");
     if (room.phase !== "WAITING") return sendError(response, 400, "已经发过牌");
-    if (room.seats.some((seat) => !seat.occupied)) return sendError(response, 400, "需要 12 人满座才能发牌");
+    if (room.seats.some((seat) => !seat.occupied || !seat.clientId)) return sendError(response, 400, "需要 12 人满座才能发牌");
     const seats = room.seats.map((seat) => seat.seat);
     const profileId = room.balanceProfileId || room.judgeClientId;
     const balanced = createBalancedDeal({
@@ -1022,7 +1103,8 @@ async function handleApi(request, response, url) {
     const pending = (room.pendingDeathSkills || []).find((item) => item.day === room.night && item.seat === seat);
     if (!pending) return sendError(response, 400, "没有该玩家待处理的死亡技能");
     if (targetSeat === seat) return sendError(response, 400, "不能选择自己作为开枪目标");
-    if (targetSeat) {
+    const suppressed = Boolean(pending.suppressed);
+    if (targetSeat && !suppressed) {
       const targetAssignment = room.assignments.find((item) => item.seat === targetSeat);
       if (!targetAssignment || targetAssignment.alive === false) return sendError(response, 400, "开枪目标必须是存活玩家");
       targetAssignment.alive = false;
@@ -1030,9 +1112,9 @@ async function handleApi(request, response, url) {
     }
     room.pendingDeathSkills = (room.pendingDeathSkills || []).filter((item) => !(item.day === room.night && item.seat === seat));
     const record = [...(room.deathSkillRecords || [])].reverse().find((item) => item.day === room.night && item.seat === seat && !item.resolved);
-    if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, resolvedAt: Date.now() });
-    writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat });
-    if (room.mode === "SYSTEM" && targetSeat) addPublicAnnouncement(room, `${seat}号玩家发动技能，${targetSeat}号玩家死亡。`);
+    if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, suppressed, resolvedAt: Date.now() });
+    writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat, suppressed });
+    if (room.mode === "SYSTEM" && targetSeat && !suppressed) addPublicAnnouncement(room, `${seat}号玩家发动技能，${targetSeat}号玩家死亡。`);
     if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
     return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
@@ -1111,8 +1193,8 @@ async function handleApi(request, response, url) {
     writeLog(room, "EXILE_CONFIRMED", record);
     if (room.mode === "SYSTEM") {
       const assignment = seat ? room.assignments.find((item) => item.seat === seat) : null;
-      const revealText = assignment?.roleId === "idiot" ? `，身份为白痴` : "";
-      addPublicAnnouncement(room, noExile ? "白天无人出局。" : `${seat}号玩家被放逐出局${revealText}。`);
+      const revealText = assignment?.roleId === "idiot" ? "，翻牌为白神" : "";
+      addPublicAnnouncement(room, noExile ? "白天无人出局。" : `${seat}号玩家出局${revealText}。`);
     }
     maybeCompleteSystemGame(room);
     return sendJson(response, 200, {
@@ -1146,11 +1228,13 @@ async function handleApi(request, response, url) {
   if (target.action === "night-start") {
     if (!isController(room, judgeToken)) return sendError(response, 403, "只有控制设备可以开始夜晚");
     if (room.phase !== "DEALT" && room.phase !== "DAY") return sendError(response, 400, "当前阶段不能开始夜晚");
-    if (room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成定序王子的投票流程");
-    if (room.mode === "SYSTEM" && room.phase === "DAY" && room.systemDayOutcomeRecordedDay !== room.night) return sendError(response, 400, "请先记录本日最终出局结果");
-    if (room.pendingNightResolution) return sendError(response, 400, "请先确认天亮死亡名单");
-    if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理蒙面人的延迟死亡");
-    if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理死亡技能");
+    if (room.mode === "SYSTEM") {
+      if (room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成定序王子的投票流程");
+      if (room.phase === "DAY" && room.systemDayOutcomeRecordedDay !== room.night) return sendError(response, 400, "请先记录本日最终出局结果");
+      if (room.pendingNightResolution) return sendError(response, 400, "请先确认天亮死亡名单");
+      if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理蒙面人的延迟死亡");
+      if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理死亡技能");
+    }
     beginNight(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
@@ -1163,6 +1247,7 @@ async function handleApi(request, response, url) {
     if (!step) return sendError(response, 400, "夜间流程已完成");
     const seat = room.seats.find((item) => item.clientId === clientId);
     const assignment = seat ? room.assignments.find((item) => item.seat === seat.seat) : null;
+    if (room.mode === "SYSTEM" && !isSystemAnnouncementReady(room)) return sendError(response, 400, "正在等待下一流程播报");
     const canAct = isJudge(room, judgeToken) || (room.mode === "SYSTEM" && canAssignmentAct(room, step, assignment));
     if (!canAct) return sendError(response, 403, "当前不是你的夜间行动步骤");
     const targetSeats = Array.isArray(body.targetSeats) ? [...new Set(body.targetSeats.map(Number).filter(Boolean))] : [];
@@ -1184,6 +1269,7 @@ async function handleApi(request, response, url) {
       room.nightActions.push(actionRecord);
       writeLog(room, "NIGHT_ACTION", actionRecord);
       room.currentNightStepIndex += 1;
+      scheduleSystemAnnouncement(room);
       return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
     }
 
@@ -1216,6 +1302,7 @@ async function handleApi(request, response, url) {
       room.nightActions.push(actionRecord);
       writeLog(room, "NIGHT_ACTION", actionRecord);
       room.currentNightStepIndex += 1;
+      scheduleSystemAnnouncement(room);
       return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
     }
 
@@ -1242,12 +1329,14 @@ async function handleApi(request, response, url) {
     };
     const privateResult = room.mode === "SYSTEM" ? buildPrivateNightResult(room, step, actionRecord) : null;
     room.nightActions.push(actionRecord);
+    if (step.id === "puppet_select" && targetSeats.length) room.puppetSeat = targetSeats[0];
     if (step.id === "captain_board" && targetSeats.length) {
       room.boardedSeat = targetSeats[0];
     }
     refreshSwapConflict(room, room.night);
     writeLog(room, "NIGHT_ACTION", actionRecord);
     room.currentNightStepIndex += 1;
+    scheduleSystemAnnouncement(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken }),
       privateResult
@@ -1291,6 +1380,7 @@ async function handleApi(request, response, url) {
     if (removed.stepId === "captain_board") room.boardedSeat = 0;
     refreshSwapConflict(room, room.night);
     room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
+    room.systemAnnouncementNotBefore = 0;
     writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })

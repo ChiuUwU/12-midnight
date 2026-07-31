@@ -106,14 +106,13 @@ test("backend keeps explicit reasons private and stores authoritative fallback r
   assert.equal(publicRoom.room.pendingNightResolution, null);
 });
 
-test("backend blocks the next night until daybreak resolution is confirmed", async () => {
+test("judge mode can start the next night without completing optional day records", async () => {
   const { clientId, id, judgeToken } = await newMechanicalRoom();
   await runMechanicalNight(id, clientId, judgeToken, { wolfTarget: 4 });
-  const blocked = await post(`/api/rooms/${id}/night-start`, { clientId, judgeToken });
-  assert.equal(blocked.status, 400);
-  assert.match(blocked.body.error, /天亮死亡名单/);
-  const recorded = await post(`/api/rooms/${id}/death-record`, { clientId, judgeToken, seats: [4] });
-  assert.deepEqual(recorded.body.room.deathRecords.at(-1).reasons, { "4": ["狼刀"] });
+  const started = await post(`/api/rooms/${id}/night-start`, { clientId, judgeToken });
+  assert.equal(started.status, 200);
+  assert.equal(started.body.room.phase, "NIGHT");
+  assert.equal(started.body.room.night, 3);
 });
 
 test("backend resolves hunter shot and publishes an exiled idiot", async () => {
@@ -194,6 +193,46 @@ test("calculator applies Dawn Voyage wind and drowning", () => {
     { night: 2, stepId: "wolves_kill", targetSeats: [2] }
   ], { windDirection: "tailwind", boardedSeat: 4 });
   assert.deepEqual(calculateSuggestedDeaths(room), [{ seat: 3, reasons: ["溺亡", "狼刀"] }]);
+});
+
+test("Follow Neighbor silently disables puppet witch and guard effects", () => {
+  const room = resolutionRoom("follow_neighbor", [
+    { night: 2, stepId: "guard_guard", targetSeats: [5] },
+    { night: 2, stepId: "wolves_kill", targetSeats: [3] },
+    { night: 2, stepId: "witch_action", antidoteUsed: true, antidoteTargetSeat: 3, poisonTargetSeat: 4 }
+  ], {
+    puppetSeat: 1,
+    assignments: [
+      { seat: 1, roleId: "witch", camp: "GOOD", alive: true },
+      { seat: 2, roleId: "guard", camp: "GOOD", alive: true },
+      { seat: 3, roleId: "villager", camp: "GOOD", alive: true },
+      { seat: 4, roleId: "villager", camp: "GOOD", alive: true }
+    ]
+  });
+  assert.deepEqual(calculateSuggestedDeaths(room), [{ seat: 3, reasons: ["狼刀"] }]);
+
+  room.puppetSeat = 2;
+  room.assignments[0].roleId = "witch";
+  room.assignments[1].roleId = "guard";
+  room.nightActions[2] = { night: 2, stepId: "witch_action", antidoteUsed: false, antidoteTargetSeat: 0, poisonTargetSeat: 4 };
+  assert.deepEqual(calculateSuggestedDeaths(room), [
+    { seat: 3, reasons: ["狼刀"] },
+    { seat: 4, reasons: ["女巫毒"] }
+  ]);
+});
+
+test("Follow Neighbor puppet hunter gets a normal-looking but suppressed death skill", () => {
+  const room = resolutionRoom("follow_neighbor", [], {
+    puppetSeat: 1,
+    assignments: [
+      { seat: 1, roleId: "hunter", camp: "GOOD", alive: false },
+      { seat: 2, roleId: "wolf", camp: "WOLF", alive: true }
+    ]
+  });
+  const skill = getDeathSkillResolution(room, { seat: 1, phase: "EXILE" });
+  assert.equal(skill.eligible, true);
+  assert.equal(skill.suppressed, true);
+  assert.equal(getDeathSkillResolution(room, { seat: 1, phase: "DAYBREAK", reasons: ["女巫毒"] }).eligible, false);
 });
 
 test("calculator resolves dance pool and mechanical guard reflection", () => {

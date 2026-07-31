@@ -119,6 +119,30 @@ const BOARDS = [
     ],
     summary: "海妖控风，船长掌船。十二人迷雾中航向黎明。",
     globalRules: { ...DEFAULT_RULES, witchCanSelfSaveFirstNight: false }
+  },
+  {
+    id: "follow_neighbor",
+    name: "唯邻是从",
+    playerCount: 12,
+    roles: [
+      { roleId: "seer", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "guard", count: 1, camp: "GOOD" },
+      { roleId: "hunter", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 5, camp: "GOOD" },
+      { roleId: "wolf_king", count: 1, camp: "WOLF" },
+      { roleId: "wolf", count: 2, camp: "WOLF" }
+    ],
+    summary: "首夜狼队选择一名相邻傀儡；傀儡不知情，技能效果会依身份失效或反转。",
+    globalRules: DEFAULT_RULES,
+    specialRules: {
+      followNeighbor: {
+        puppetSelectedFirstNight: true,
+        puppetMustBeWolfNeighbor: true,
+        puppetIsPersistent: true,
+        puppetSeerReadsAsWolf: true
+      }
+    }
   }
 ];
 
