@@ -1408,7 +1408,6 @@ async function handleRoomAction(request, env, route) {
   } else if (route.action === "death-record") {
     if (!isJudge(room, judgeToken)) return error(403, "只有房主可以记录死亡");
     if (room.phase !== "DAY") return error(400, "当前阶段不能记录天亮死亡");
-    if (!isSheriffElectionFinished(room)) return error(400, "第一天死亡结果应在警长竞选结束后公布");
     const seats = uniqueSeats(body.seats);
     seats.forEach((seat) => {
       const assignment = room.assignments.find((item) => item.seat === seat);

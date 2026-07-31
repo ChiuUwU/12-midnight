@@ -87,6 +87,23 @@ async function newMechanicalRoom() {
   return { clientId, id, judgeToken };
 }
 
+test("judge can record first-night deaths before optional sheriff records", async () => {
+  const clientId = `daybreak-${Date.now()}-${crypto.randomInt(10000)}`;
+  const created = await post("/api/rooms", { clientId, boardId: "mechanical_wolf_spirit_medium" });
+  const id = created.body.room.id;
+  const judgeToken = created.body.judgeToken;
+  const auth = { clientId, judgeToken };
+  await post(`/api/rooms/${id}/fill-test`, auth);
+  const dealt = await post(`/api/rooms/${id}/deal`, auth);
+  const wolfTarget = dealt.body.room.assignments.find((item) => item.roleId === "villager").seat;
+  await runMechanicalNight(id, clientId, judgeToken, { wolfTarget });
+
+  const recorded = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [wolfTarget] });
+  assert.equal(recorded.status, 200);
+  assert.equal(recorded.body.room.sheriffElectionDone, false);
+  assert.deepEqual(recorded.body.room.deathRecords.at(-1).seats, [wolfTarget]);
+});
+
 test("backend keeps explicit reasons private and stores authoritative fallback reasons", async () => {
   const { clientId, id, judgeToken } = await newMechanicalRoom();
   await runMechanicalNight(id, clientId, judgeToken, { wolfTarget: 7, poisonSeat: 9 });
