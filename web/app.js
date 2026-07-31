@@ -656,6 +656,14 @@
     return data.room;
   }
 
+  function hasUnsavedInteraction() {
+    if (app.querySelector(".seat.selected, .card-option.selected, [data-action='witch-antidote-choice'].active")) return true;
+    return Array.from(app.querySelectorAll("input, textarea, select")).some((control) => {
+      if (control.tagName === "SELECT") return control.selectedIndex > 0;
+      return control.value !== control.defaultValue;
+    });
+  }
+
   async function remotePost(action, payload = {}) {
     const data = await apiRequest(`/api/rooms/${state.currentRoomId}/${action}`, {
       method: "POST",
@@ -1727,7 +1735,6 @@
       <section class="panel">
         <div class="label">公开死亡</div>
         <div class="body-text">${latestDeaths ? `第 ${latestDeaths.day} 天：${formatSeatList(latestDeaths.seats)}` : "暂未记录"}</div>
-        ${room.phase === "DAY" && room.night === 1 && !sheriffElectionDone ? '<div class="notice">第一天死亡结果应在警长竞选结束后公布。</div>' : ""}
         ${suggestedDeaths.length ? `<div class="notice">建议天亮死亡：${suggestedDeaths.map((item) => `${item.seat}号（${item.reasons.join("、")}）`).join("、")}</div>` : ""}
       </section>
       <section class="panel">
@@ -3369,9 +3376,10 @@
   if (IS_REMOTE) {
     setInterval(() => {
       if (!state.currentRoomId || !AUTO_REFRESH_VIEWS.includes(state.view)) return;
-      if (state.view === "night" && (state.remoteRoom?.isJudge || state.remoteRoom?.systemNight?.canAct)) return;
       refreshRemoteRoom()
-        .then(render)
+        .then(() => {
+          if (!hasUnsavedInteraction()) render();
+        })
         .catch(() => {});
     }, 2500);
   }
