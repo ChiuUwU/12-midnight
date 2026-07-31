@@ -37,6 +37,10 @@
     return Array.from(values, (value) => value.toString(16).padStart(2, "0")).join("");
   }
 
+  function createClientId() {
+    return `user-${createBalanceProfileId()}`;
+  }
+
   const DEFAULT_RULES = {
     winCondition: "KILL_SIDE",
     sheriffEnabled: true,
@@ -188,6 +192,23 @@
       ],
       roleSummary: "预言家 · 女巫 · 船长 · 白痴 · 海妖 · 平民×4 · 狼人×3",
       tagline: "海妖控风，船长掌船。十二人迷雾中航向黎明。",
+      globalRules: DEFAULT_RULES
+    },
+    {
+      id: "follow_neighbor",
+      name: "唯邻是从",
+      playerCount: 12,
+      roles: [
+        { roleId: "seer", count: 1, camp: "GOOD" },
+        { roleId: "witch", count: 1, camp: "GOOD" },
+        { roleId: "guard", count: 1, camp: "GOOD" },
+        { roleId: "hunter", count: 1, camp: "GOOD" },
+        { roleId: "villager", count: 5, camp: "GOOD" },
+        { roleId: "wolf_king", count: 1, camp: "WOLF" },
+        { roleId: "wolf", count: 2, camp: "WOLF" }
+      ],
+      roleSummary: "预言家 · 女巫 · 守卫 · 猎人 · 平民×5 · 狼王 · 狼人×2",
+      tagline: "首夜狼队在相邻座位中选择一名不知情的傀儡。",
       globalRules: DEFAULT_RULES
     }
   ];
@@ -344,10 +365,28 @@
     return assignments.some((assignment) => assignment.alive !== false && assignment.roleId === step.actor);
   }
 
+  function getFollowNeighborPuppetSeats(room) {
+    const wolves = (room.assignments || []).filter((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId));
+    const wolfSeats = new Set(wolves.map((assignment) => assignment.seat));
+    const candidates = new Set();
+    wolves.forEach((assignment) => {
+      candidates.add(assignment.seat === 1 ? 12 : assignment.seat - 1);
+      candidates.add(assignment.seat === 12 ? 1 : assignment.seat + 1);
+    });
+    return [...candidates].filter((seat) => !wolfSeats.has(seat) && (room.assignments || []).some((assignment) => assignment.seat === seat && assignment.alive !== false)).sort((left, right) => left - right);
+  }
+
   function createNightSteps(boardId, night, room = null) {
     const firstNight = night === 1;
     const steps = [];
-    if (boardId === "pre_witch_hunter_idiot_mixed") {
+    if (boardId === "follow_neighbor") {
+      const witchStep = createWitchStep(room);
+      steps.push({ id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true });
+      if (firstNight) steps.push({ id: "puppet_select", actor: "wolf_team", label: "狼人和狼王选择傀儡目标", targetCount: 1, allowSkip: false, allowedSeats: getFollowNeighborPuppetSeats(room) });
+      steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true });
+      if (witchStep) steps.push(witchStep);
+      steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    } else if (boardId === "pre_witch_hunter_idiot_mixed") {
       if (firstNight) steps.push({ id: "mixed_blood_model", actor: "mixed_blood", label: "混血儿选择榜样", targetCount: 1, allowSkip: false });
       const witchStep = createWitchStep(room);
       steps.push(
@@ -460,18 +499,24 @@
   let state = loadState();
   let lastSystemAnnouncementKey = "";
 
-  function speakSystemAnnouncement(text) {
+  function speakSystemAnnouncement(text, repetitions = 1) {
     if (!text || !("speechSynthesis" in window)) return;
     window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = "zh-CN";
-    utterance.rate = 0.9;
-    window.speechSynthesis.speak(utterance);
+    const speakNext = (remaining) => {
+      const utterance = new SpeechSynthesisUtterance(text);
+      utterance.lang = "zh-CN";
+      utterance.rate = 0.9;
+      utterance.onend = () => {
+        if (remaining > 1) window.setTimeout(() => speakNext(remaining - 1), 250);
+      };
+      window.speechSynthesis.speak(utterance);
+    };
+    speakNext(Math.max(1, Number(repetitions) || 1));
   }
 
   function createInitialState() {
     return {
-      currentUserId: `user-${Math.random().toString(36).slice(2)}-${Date.now().toString(36)}`,
+      currentUserId: createClientId(),
       balanceProfileId: createBalanceProfileId(),
       dealHistory: [],
       currentRoomId: "",
@@ -538,6 +583,7 @@
       balanceProfileId: state.balanceProfileId,
       seats: createSeats(),
       assignments: [],
+      puppetSeat: 0,
       logs: [],
       nightActions: [],
       currentNightSteps: [],
@@ -561,7 +607,8 @@
       lastWindDirection: "calm",
       boardedSeat: 0,
       captainDiedLastDay: false,
-      captainAliveAtDawn: true
+      captainAliveAtDawn: true,
+      systemAnnouncementNotBefore: 0
     };
   }
 
@@ -569,6 +616,13 @@
     if (IS_REMOTE) return state.remoteRoom;
     if (!state.currentRoomId) return null;
     return state.rooms[state.currentRoomId] || null;
+  }
+
+  function getMySeat(room) {
+    if (!room) return null;
+    return IS_REMOTE
+      ? room.mySeat || null
+      : room.seats.find((seat) => seat.userId === state.currentUserId) || null;
   }
 
   async function apiRequest(path, options = {}) {
@@ -1048,6 +1102,7 @@
     const isFirstNight = night === 1;
     const scripts = {
       mixed_blood_model: "混血儿请睁眼，请选择你的榜样。选择后闭眼。",
+      puppet_select: "狼人和狼王请睁眼，确定傀儡目标。傀儡不睁眼，不与狼队相认。选择后闭眼。",
       wolves_kill: isFirstNight ? "狼人请睁眼，互认同伴，商量战术，确认击杀目标。" : "狼人请睁眼，商量战术，确认击杀目标。",
       witch_action: "女巫请睁眼，今夜该号玩家倒牌，救人给出手势，使用毒药比出号码。",
       witch_antidote: "女巫请睁眼，今夜该号玩家倒牌，使用解药比出手势。",
@@ -1094,7 +1149,10 @@
     if (!assignment) return `${seat}号：未找到身份`;
     const role = getRole(assignment.roleId) || { name: assignment.roleId };
     if (step.id === "seer_check") {
-      const result = assignment.camp === "WOLF" ? "狼人" : "好人";
+      const puppetSeer = room.boardId === "follow_neighbor" && Number(room.puppetSeat) === Number((room.assignments || []).find((item) => item.roleId === "seer")?.seat);
+      const puppetTarget = room.boardId === "follow_neighbor" && Number(room.puppetSeat) === seat;
+      const baseResult = assignment.camp === "WOLF" || puppetTarget ? "狼人" : "好人";
+      const result = puppetSeer ? (baseResult === "狼人" ? "好人" : "狼人") : baseResult;
       return selectedSeat === seat ? `${seat}号查验结果：${result}` : `选择${selectedSeat}号，实际查验${seat}号：${result}`;
     }
     if (["spirit_medium_check", "mechanical_check"].includes(step.id) || treasureCheck) {
@@ -1539,7 +1597,7 @@
       return;
     }
     const board = getBoard(room.boardId);
-    const mySeat = room.seats.find((seat) => seat.userId === state.currentUserId);
+    const mySeat = getMySeat(room);
     const myAssignment = mySeat ? (room.assignments || []).find((item) => item.seat === mySeat.seat) : null;
     const occupiedCount = room.seats.filter((seat) => seat.occupied).length;
     const isJudge = !IS_REMOTE || room.isJudge;
@@ -1673,7 +1731,9 @@
       ${gameOver ? `<section class="panel"><div class="value">${gameOutcomeText}</div><div class="notice">可以进入复盘查看身份和操作记录。</div></section>` : ""}
       <section class="seat-grid">
         ${room.seats.map((seat) => {
-          const className = seat.userId === state.currentUserId ? "mine" : seat.occupied ? "taken" : "";
+          const occupied = IS_REMOTE ? Boolean(seat.occupied) : Boolean(seat.occupied && seat.userId);
+          const mine = IS_REMOTE ? room.mySeat?.seat === seat.seat : seat.userId === state.currentUserId;
+          const className = mine ? "mine" : occupied ? "taken" : "";
           return `<button class="seat ${className}" data-action="choose-seat" data-seat="${seat.seat}" ${canControl && IS_REMOTE ? "disabled" : ""}>${seat.seat}号</button>`;
         }).join("")}
       </section>
@@ -1692,7 +1752,7 @@
   function renderIdentity() {
     const room = getCurrentRoom();
     if (!room) return setView("home");
-    const mySeat = room.seats.find((seat) => seat.userId === state.currentUserId);
+    const mySeat = getMySeat(room);
     const assignment = mySeat ? room.assignments.find((item) => item.seat === mySeat.seat) : null;
     if (!assignment) {
       app.innerHTML = `
@@ -1740,25 +1800,26 @@
     const isJudge = !IS_REMOTE || room.isJudge;
     const systemNight = room.mode === "SYSTEM" ? room.systemNight : null;
     if (systemNight?.canControl) {
+      const announcementReady = systemNight.announcementReady !== false;
       const announcementText = systemNight.complete
         ? "所有夜间身份均已行动，请等待天亮。"
         : getJudgeScript({ id: systemNight.stepId, label: systemNight.announcement });
       const announcementKey = `${room.id}-${room.night}-${systemNight.stepIndex}-${systemNight.complete}`;
       app.innerHTML = `
-        ${pageHeader(`第 ${room.night || 1} 夜`, systemNight.complete ? "夜间行动已完成" : "公共语音播报中")}
+        ${pageHeader(`第 ${room.night || 1} 夜`, systemNight.complete ? "夜间行动已完成" : announcementReady ? "公共语音播报中" : "等待下一位玩家")}
         <section class="panel">
           <div class="label">公共设备</div>
-          <div class="value">${systemNight.complete ? "等待进入天亮" : "请保持全员闭眼"}</div>
+          <div class="value">${systemNight.complete ? "等待进入天亮" : announcementReady ? "请保持全员闭眼" : "上一位玩家操作完成，10 秒后播报下一流程"}</div>
           <div class="progress-bar"><div class="progress-fill" style="width:${systemNight.stepCount ? Math.round((systemNight.stepIndex / systemNight.stepCount) * 100) : 100}%"></div></div>
           <div class="notice">进度 ${Math.min(systemNight.stepIndex + (systemNight.complete ? 0 : 1), systemNight.stepCount)} / ${systemNight.stepCount}</div>
         </section>
-        ${systemNight.complete ? '<button class="button primary" data-action="night-finish">结算并天亮</button>' : '<button class="button" data-action="system-speak" data-text="' + escapeHtml(announcementText) + '">重播当前台词</button>'}
+        ${systemNight.complete ? '<button class="button primary" data-action="night-finish">结算并天亮</button>' : announcementReady ? '<button class="button" data-action="system-speak" data-text="' + escapeHtml(announcementText) + '">重播当前台词</button>' : ""}
         ${systemNight.stepIndex > 0 ? '<button class="button" data-action="night-undo">撤回上一步</button>' : ""}
         <button class="button" data-action="view" data-view="room">返回房间</button>
       `;
-      if (announcementKey !== lastSystemAnnouncementKey) {
+      if (announcementReady && announcementKey !== lastSystemAnnouncementKey) {
         lastSystemAnnouncementKey = announcementKey;
-        setTimeout(() => speakSystemAnnouncement(announcementText), 100);
+        setTimeout(() => speakSystemAnnouncement(announcementText, 3), 100);
       }
       return;
     }
@@ -2364,7 +2425,7 @@
           render();
           return;
         }
-        const mySeat = room.seats.find((seat) => seat.userId === state.currentUserId);
+        const mySeat = getMySeat(room);
         if (!mySeat || !(room.sheriffCandidates || []).includes(mySeat.seat)) {
           window.alert("只有上警玩家可以退水");
           return;
@@ -2438,15 +2499,18 @@
           render();
           return;
         }
-        if (room.pendingNightResolution) throw new Error("请先确认天亮死亡名单");
-        if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) throw new Error("请先处理蒙面人的延迟死亡");
-        if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) throw new Error("请先处理死亡技能");
+        if (room.mode === "SYSTEM") {
+          if (room.pendingNightResolution) throw new Error("请先确认天亮死亡名单");
+          if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) throw new Error("请先处理蒙面人的延迟死亡");
+          if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) throw new Error("请先处理死亡技能");
+        }
         room.night = (room.night || 0) + 1;
         room.phase = "NIGHT";
         room.lastWindDirection = room.windDirection || "calm";
         room.boardedSeat = 0;
         room.captainAliveAtDawn = (room.assignments || []).some((a) => a.roleId === "captain" && a.alive !== false);
         room.captainDiedLastDay = false;
+        room.systemAnnouncementNotBefore = 0;
         room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
         room.currentNightStepIndex = 0;
         room.nightActions = room.nightActions || [];
@@ -2678,6 +2742,7 @@
         };
         room.nightActions = room.nightActions || [];
         room.nightActions.push(actionRecord);
+        if (step.id === "puppet_select" && targetSeats.length) room.puppetSeat = targetSeats[0];
         if (step.id === "captain_board" && targetSeats.length) {
           room.boardedSeat = targetSeats[0];
         }
@@ -2948,7 +3013,8 @@
         }
         const pending = (room.pendingDeathSkills || []).find((item) => item.day === room.night && item.seat === seat);
         if (!pending) throw new Error("没有该玩家待处理的死亡技能");
-        if (targetSeat) {
+        const suppressed = Boolean(pending.suppressed);
+        if (targetSeat && !suppressed) {
           const targetAssignment = room.assignments.find((item) => item.seat === targetSeat);
           if (!targetAssignment || targetAssignment.alive === false) throw new Error("开枪目标必须是存活玩家");
           targetAssignment.alive = false;
@@ -2957,8 +3023,8 @@
         }
         room.pendingDeathSkills = (room.pendingDeathSkills || []).filter((item) => !(item.day === room.night && item.seat === seat));
         const record = [...(room.deathSkillRecords || [])].reverse().find((item) => item.day === room.night && item.seat === seat && !item.resolved);
-        if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, resolvedAt: Date.now() });
-        writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat });
+        if (record) Object.assign(record, { resolved: true, targetSeat, skipped: !targetSeat, suppressed, resolvedAt: Date.now() });
+        writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat, suppressed });
         saveState();
         render();
       } catch (error) {
@@ -3189,7 +3255,8 @@
       }
       const seatNumber = Number(target.dataset.seat);
       const selected = room.seats.find((seat) => seat.seat === seatNumber);
-      if (selected.occupied && selected.userId !== state.currentUserId) {
+      const isMine = IS_REMOTE ? room.mySeat?.seat === seatNumber : selected.userId === state.currentUserId;
+      if (selected.occupied && !isMine) {
         window.alert("座位已被占用");
         return;
       }

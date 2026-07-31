@@ -14,11 +14,11 @@
 
 ```
 web/index.html          ← 入口
-web/app.js              ← 全部前端逻辑 (2778行 SPA)，含 17 个视图、事件委托、API 调用
-web/styles.css          ← 移动端响应式样式 (898行)
+web/app.js              ← 全部前端逻辑（SPA），含视图、事件委托、API 调用
+web/styles.css          ← 移动端响应式样式
 web/balanced-deal.js    ← 均衡发牌算法 (UMD, 250行)
-server.js               ← Node 本地服务器 (952行)，REST API + 内存房间
-functions/api/rooms/    ← Cloudflare Pages Functions (1000行)，API 与 server.js 同构
+server.js               ← Node 本地服务器，REST API + 内存房间
+functions/api/rooms/    ← Cloudflare Pages Functions，API 与 server.js 同构
 miniprogram/            ← 微信小程序版（暂停），其中 data/roles.js 和 data/boards.js 是共享数据源
 db/schema.sql           ← D1 表结构 (rooms + deal_histories)
 ```
@@ -32,7 +32,7 @@ db/schema.sql           ← D1 表结构 (rooms + deal_histories)
 - **均衡发牌**：每局 2000 套候选 → 温度加权随机抽取 → 记录最近 10 局历史避免重复。
 - **房间过期**：12 小时无写入自动清理。
 
-## 21 个角色 (ROLES)
+## 22 个角色 (ROLES)
 
 **好人**: seer(预言家), witch(女巫), hunter(猎人), idiot(白痴), villager(平民), dancer(舞者), spirit_medium(通灵师), poisoner(毒师), dreamer(摄梦人), masked_man(蒙面人), guard(守卫), magician(魔术师), order_prince(定序王子)
 
@@ -65,10 +65,13 @@ db/schema.sql           ← D1 表结构 (rooms + deal_histories)
 
 ## 当前状态
 
-### 已完成
+### 已完成（截至 2026-07-29）
 - 房间 CRUD、选座、补齐测试、分享链接
-- 5 版型均衡发牌、玩家私密看身份、法官全局身份、复盘
+- 6 版型均衡发牌、玩家私密看身份、法官全局身份、复盘
 - 夜间流程逐步记录（按版型生成步骤、撤回、跳过、盗宝牌选择）
+- 权威夜间结算建议、法官确认阻断、死亡技能与延迟死亡待办
+- 无法官模式的玩家私密夜间行动、公共播报、自动胜负与狼人自爆
+- JUDGE 模式可直接开下一夜；SYSTEM 模式空座防护、白神放逐翻牌，以及 10 秒后连续 3 次的下一流程播报
 - 守卫连续同守拦截、女巫用药状态跟踪
 - 诡术师/魔术师换号冲突检测
 - 上警/退水/警徽投票(含PK)/警徽移交撕毁
@@ -77,18 +80,11 @@ db/schema.sql           ← D1 表结构 (rooms + deal_histories)
 - 随机发言顺序工具
 - Cloudflare D1 持久化
 
-### 待完成（按优先级）
-1. 夜间死亡半自动结算（目前只有建议，需法官确认）
-2. 假面舞会舞池结算
-3. 混血儿榜样选择后阵营跟随
-4. 机械狼模仿后技能处理
-5. 蒙面人延迟死亡
-6. 盗宝大师牌技能生效
-7. 猎人/狼王「最后一神/最后一狼」不能开枪判定
-8. 白痴被放逐公布身份
-9. 胜负自动判断
-10. 无法官模式
-11. 玩家手机夜间私密操作 (P2)
+### 当前优先修复
+1. P0：线上响应泄露 `clientId`，而该值可被用于冒充玩家；法官 4 位口令也缺少限流。
+2. 为 SYSTEM 模式补浏览器多设备验收：确认每次行动后准确等待 10 秒，并在公共设备连续播报下一流程 3 次；覆盖刷新、重复提交和多控制设备。
+3. 为空座（已报告为 7 号）补真实多端复现/回归：当前已有服务端拒绝与前端渲染防护，仍需排除外部测试填充或旧缓存导致的占座。
+4. 统一并更新规则数据结构、页面流程等剩余文档；补 Cloudflare/D1 集成、并发和浏览器端到端测试。
 
 ## 开发原则
 

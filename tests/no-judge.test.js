@@ -47,10 +47,29 @@ async function findSystemActor(id, players) {
   return null;
 }
 
+async function completeSafeSystemNight(game) {
+  assert.equal((await post(`/api/rooms/${game.id}/night-start`, game.controllerAuth)).status, 200);
+  while (true) {
+    const controllerRoom = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+    if (controllerRoom.systemNight.complete) break;
+    const actor = await findSystemActor(game.id, game.players);
+    assert.ok(actor, `no actor for ${controllerRoom.systemNight.stepId}`);
+    const fallbackSeat = actor.room.aliveSeats.find((seat) => seat !== actor.room.assignments[0].seat) || actor.room.aliveSeats[0];
+    let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+    if (actor.step.id === "wolves_kill") payload.skipped = true;
+    else if (actor.step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
+    else if (actor.step.targetCount > 0) payload.targetSeats = Array.from({ length: actor.step.targetCount }, (_, index) => actor.room.aliveSeats[(actor.room.aliveSeats.indexOf(fallbackSeat) + index) % actor.room.aliveSeats.length]);
+    const acted = await post(`/api/rooms/${game.id}/night-action`, payload);
+    assert.equal(acted.status, 200, `${actor.step.id}: ${acted.body.error || "failed"}`);
+  }
+  assert.equal((await post(`/api/rooms/${game.id}/night-finish`, game.controllerAuth)).status, 200);
+  assert.equal((await post(`/api/rooms/${game.id}/system-publish-daybreak`, game.controllerAuth)).status, 200);
+}
+
 test.before(async () => {
   server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
-    env: { ...process.env, PORT: String(port), HOST: "127.0.0.1" },
+    env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS: "0" },
     stdio: "ignore"
   });
   for (let attempt = 0; attempt < 50; attempt += 1) {
@@ -167,6 +186,69 @@ test("system mode keeps roles private and lets only the current role act", async
   assert.equal((await post(`/api/rooms/${id}/night-start`, controllerAuth)).status, 400);
   assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...controllerAuth, noExile: true, seat: 0 })).status, 200);
   assert.equal((await post(`/api/rooms/${id}/night-start`, controllerAuth)).status, 200);
+});
+
+test("an ownerless seat request cannot create a phantom occupant", async () => {
+  const created = await post("/api/rooms", {
+    clientId: `phantom-controller-${Date.now()}`,
+    mode: "SYSTEM",
+    boardId: "pre_witch_hunter_idiot_mixed"
+  });
+  assert.equal(created.status, 200);
+  const id = created.body.room.id;
+  const invalid = await post(`/api/rooms/${id}/seat`, { seat: 7 });
+  assert.equal(invalid.status, 400);
+  const observer = await getRoom(id, "phantom-observer");
+  assert.equal(observer.seats.find((seat) => seat.seat === 7).occupied, false);
+});
+
+test("public room responses never expose player credentials", async () => {
+  const game = await createSystemRoom("private-seat-token");
+  const observer = await getRoom(game.id, "unseated-observer");
+  const serialized = JSON.stringify(observer);
+  for (const player of game.players) assert.equal(serialized.includes(player.clientId), false);
+  observer.seats.forEach((seat) => {
+    assert.equal(Object.hasOwn(seat, "clientId"), false);
+    assert.equal(Object.hasOwn(seat, "userId"), false);
+  });
+  assert.equal(observer.mySeat, null);
+  const playerRoom = await getRoom(game.id, game.players[0].clientId);
+  assert.equal(Object.hasOwn(playerRoom.mySeat, "clientId"), false);
+  assert.equal(Object.hasOwn(playerRoom.mySeat, "userId"), false);
+});
+
+test("judge-code claims lock after repeated failures", async () => {
+  const controllerId = `judge-lock-${Date.now()}`;
+  const created = await post("/api/rooms", {
+    clientId: controllerId,
+    mode: "JUDGE",
+    boardId: "pre_witch_hunter_idiot_mixed"
+  });
+  assert.equal(created.status, 200);
+  const id = created.body.room.id;
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const rejected = await post(`/api/rooms/${id}/judge-claim`, { clientId: `attacker-${attempt}`, judgeCode: "0000" });
+    assert.equal(rejected.status, 403);
+  }
+  const locked = await post(`/api/rooms/${id}/judge-claim`, { clientId: "attacker-final", judgeCode: "0000" });
+  assert.equal(locked.status, 429);
+  const validDuringLock = await post(`/api/rooms/${id}/judge-claim`, { clientId: "legitimate-judge", judgeCode: created.body.room.judgeCode });
+  assert.equal(validDuringLock.status, 429);
+});
+
+test("system mode publicly reveals an exiled idiot as white god", async () => {
+  const game = await createSystemRoom("white-god-reveal");
+  const idiot = game.views.find((item) => item.room.assignments[0].roleId === "idiot");
+  assert.ok(idiot);
+  await completeSafeSystemNight(game);
+  const exiled = await post(`/api/rooms/${game.id}/exile-record`, {
+    ...game.controllerAuth,
+    seat: idiot.room.assignments[0].seat,
+    noExile: false
+  });
+  assert.equal(exiled.status, 200);
+  assert.equal(exiled.body.room.latestPublicAnnouncement.text, `${idiot.room.assignments[0].seat}号玩家出局，翻牌为白神。`);
+  assert.deepEqual(exiled.body.room.publicReveals, [{ seat: idiot.room.assignments[0].seat, roleId: "idiot" }]);
 });
 
 test("system witch rules reject first-night self-save and invalid potion reuse", async () => {
@@ -314,13 +396,14 @@ test("a system-mode wolf can self-destruct and immediately end the day", async (
 });
 
 test("all complex boards can complete two system-guided nights", async () => {
-  const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage"];
+  const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage", "follow_neighbor"];
   const expectedSecondNightSteps = {
     masquerade: ["dancer_dance", "mask_check", "mask_give"],
     treasure_master: ["treasure_pick", "treasure_skill", "wolves_kill"],
     mechanical_wolf_spirit_medium: ["mechanical_guard", "mechanical_mimic"],
     realm_of_trickery: ["magician_swap", "trickster_swap"],
-    dawn_voyage: ["siren_wind", "captain_board"]
+    dawn_voyage: ["siren_wind", "captain_board"],
+    follow_neighbor: []
   };
   for (const boardId of boardIds) {
     const controllerId = `controller-${boardId}-${Date.now()}`;
@@ -383,7 +466,8 @@ test("all complex boards can complete two system-guided nights", async () => {
       return stepIds;
     }
 
-    await runNight(1);
+    const firstNightSteps = await runNight(1);
+    if (boardId === "follow_neighbor") assert.ok(firstNightSteps.includes("puppet_select"));
     assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...controllerAuth, noExile: true, seat: 0 })).status, 200);
     const secondNightSteps = await runNight(2);
     expectedSecondNightSteps[boardId].forEach((stepId) => assert.ok(secondNightSteps.includes(stepId), `${boardId} missing ${stepId}`));

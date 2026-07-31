@@ -23,6 +23,8 @@
 - [MVP 开发清单](./docs/mvp-build-plan-v0.1.md)
 - [Cloudflare 免费部署](./docs/cloudflare-deploy.md)
 - [项目交接文档](./docs/handoff.md)
+- [无法官模式边界](./docs/no-judge-mode-v0.1.md)
+- [版型规则详解](./docs/board-guide-v1.0.md)
 
 ## 第一版固定版型
 
@@ -31,6 +33,8 @@
 - 盗宝大师
 - 机械狼通灵师
 - 诡术之境
+- 曙光航纪
+- 唯邻是从
 
 ## 开发原则
 

@@ -35,6 +35,11 @@
     return 0;
   }
 
+  function isFollowNeighborPuppet(room, roleId) {
+    if (room.boardId !== "follow_neighbor" || !room.puppetSeat) return false;
+    return (room.assignments || []).some((assignment) => assignment.seat === Number(room.puppetSeat) && assignment.roleId === roleId);
+  }
+
   function calculateNightResolution(room, night = room.night) {
     const actions = (room.nightActions || []).filter((item) => item.night === night);
     const previousActions = (room.nightActions || []).filter((item) => item.night === night - 1);
@@ -59,7 +64,7 @@
     const treasureTarget = treasureSkill && treasureSkill.targetSeats && Number(treasureSkill.targetSeats[0]) || 0;
     const treasureRole = treasureSkill?.cardRoleId || "";
     const poisonerPoison = firstTarget("poisoner_poison") || (treasureRole === "poisoner" ? treasureTarget : 0);
-    const guard = firstTarget("guard_guard");
+    let guard = firstTarget("guard_guard");
     const mechanicalGuard = firstTarget("mechanical_guard");
     const mechanicalPoison = firstTarget("mechanical_poison");
     const mechanicalKill = firstTarget("mechanical_kill");
@@ -71,6 +76,13 @@
     const danceSeats = danceAction?.targetSeats?.map(Number) || [];
     const maskSeat = firstTarget("mask_give");
     const dancerSeat = (room.assignments || []).find((item) => item.roleId === "dancer")?.seat || 0;
+
+    // 傀儡仍能完成界面操作并消耗药剂，但结算时静默失效。
+    if (isFollowNeighborPuppet(room, "witch")) {
+      antidote = 0;
+      witchPoison = 0;
+    }
+    if (isFollowNeighborPuppet(room, "guard")) guard = 0;
 
     if (room.boardId === "dawn_voyage") {
       const wind = room.windDirection || "calm";
@@ -220,6 +232,10 @@
       || (phase === "SELF_DESTRUCT" && skillRoleId !== "hunter");
     if (poisonDeath) return { seat, skillRoleId, eligible: false, reason: "被毒杀不能发动死亡技能", day };
     if (!triggerAllowed) return { seat, skillRoleId, eligible: false, reason: "当前出局方式不能发动死亡技能", day };
+
+    if (room.boardId === "follow_neighbor" && assignment.roleId === "hunter" && Number(room.puppetSeat) === Number(seat)) {
+      return { seat, skillRoleId, eligible: true, suppressed: true, reason: "可以发动死亡技能", day };
+    }
 
     if (skillRoleId === "hunter") {
       const otherGodAlive = (room.assignments || []).some((item) => item.seat !== seat && item.alive !== false && GOD_ROLE_IDS.has(item.roleId));

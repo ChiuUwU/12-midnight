@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { BOARDS } = require("../miniprogram/data/boards");
 const { dealBoard } = require("../miniprogram/utils/deal");
-const { createBalancedDeal } = require("../web/balanced-deal");
+const { createBalancedDeal, getFollowNeighborStats } = require("../web/balanced-deal");
 
 const seats = Array.from({ length: 12 }, (_, index) => index + 1);
 const randomInt = (maximum) => crypto.randomInt(maximum);
@@ -68,4 +68,38 @@ test("balance metadata records hidden strength and target inputs", () => {
   assert.ok(["WEAK", "EVEN", "SLIGHTLY_STRONG", "STRONG"].includes(result.meta.wolfTarget.type));
   assert.ok(["STANDARD", "RELAXED", "FREE"].includes(result.meta.keyRoleMode));
   assert.ok(result.meta.components.keyRolePenalty >= 0);
+});
+
+test("Follow Neighbor keeps every wolf layout legal and scores unique adjacent gods", () => {
+  const assignments = [
+    { seat: 1, roleId: "wolf", camp: "WOLF" },
+    { seat: 2, roleId: "wolf", camp: "WOLF" },
+    { seat: 3, roleId: "wolf_king", camp: "WOLF" },
+    { seat: 4, roleId: "seer", camp: "GOOD" },
+    { seat: 5, roleId: "witch", camp: "GOOD" },
+    { seat: 6, roleId: "guard", camp: "GOOD" },
+    { seat: 7, roleId: "hunter", camp: "GOOD" },
+    ...[8, 9, 10, 11, 12].map((seat) => ({ seat, roleId: "villager", camp: "GOOD" }))
+  ];
+  const stats = getFollowNeighborStats(assignments);
+  assert.deepEqual(stats.wolfSeats, [1, 2, 3]);
+  assert.deepEqual(stats.adjacentSeats, [4, 12]);
+  assert.equal(stats.adjacentGodCount, 1);
+
+  const result = deal("follow_neighbor", [], 500);
+  assert.ok(result.meta.followNeighbor);
+  assert.ok(result.meta.followNeighbor.adjacentGodCount >= 0);
+  assert.ok(result.meta.components.adjacentGodPenalty >= 0);
+});
+
+test("Follow Neighbor deal average stays in the agreed two-to-three adjacent-god range", () => {
+  let history = [];
+  const counts = [];
+  for (let index = 0; index < 100; index += 1) {
+    const result = deal("follow_neighbor", history, 500);
+    history = result.history;
+    counts.push(result.meta.followNeighbor.adjacentGodCount);
+  }
+  const average = counts.reduce((sum, value) => sum + value, 0) / counts.length;
+  assert.ok(average >= 2 && average <= 3, `adjacent God average was ${average}`);
 });
