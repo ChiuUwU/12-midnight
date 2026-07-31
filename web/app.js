@@ -1078,22 +1078,17 @@
         ? { title: "继续夜间流程", detail: `当前步骤：${step.label}`, action: "继续夜间流程" }
         : { title: "夜间已完成", detail: room.night === 1 ? "下一步进入警长竞选。" : "下一步确认天亮死亡。", action: "天亮" };
     }
-    if (room.phase === "DAY" && room.night === 1 && !(room.sheriffCandidates || []).length && !room.sheriffElectionDone) {
-      return { title: "白天阶段", detail: "可记录上警、天亮死亡或直接进入下一夜。", action: "记录上警" };
-    }
-    if (room.phase === "DAY" && room.night === 1 && !isSheriffElectionFinished(room)) {
-      const activeCandidates = (room.sheriffCandidates || []).filter((seat) => !(room.sheriffWithdrawn || []).includes(seat));
-      if (!activeCandidates.length) return { title: "白天阶段", detail: "警上玩家均已退水。可记录天亮死亡或直接进入下一夜。", action: "记录天亮死亡" };
-      const vote = room.sheriffVoteRecord;
-      return vote && vote.pkSeats && vote.pkSeats.length
-        ? { title: "警徽 PK 投票", detail: `PK 玩家：${formatSeatList(vote.pkSeats)}。`, action: "记录警徽投票" }
-        : { title: "白天阶段", detail: `警上：${formatSeatList(activeCandidates)}。可记录警徽投票、天亮死亡或进入下一夜。`, action: "记录警徽投票" };
-    }
-    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
+    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night && record.phase === "DAYBREAK");
     if (room.phase === "DAY" && !daybreakRecorded) {
-      return { title: "白天阶段", detail: "可选择记录天亮死亡、放逐投票或进入下一夜。", action: "记录天亮死亡" };
+      return { title: "记录天亮死亡", detail: "请先公布昨夜死亡结果；上警、退水和警徽记录均为可选。", action: "记录天亮死亡" };
     }
     if (room.phase === "DAY") {
+      if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) {
+        return { title: "处理延迟死亡", detail: "请先处理仍待确认的延迟死亡。", action: "处理延迟死亡" };
+      }
+      if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) {
+        return { title: "处理死亡技能", detail: "请先完成或放弃当前死亡技能。", action: "处理死亡技能" };
+      }
       if (room.pendingExileResult) {
         return { title: "等待发动技能", detail: "首轮投票结果已产生，宣布实际死讯前等待定序王子发动回溯。", action: "处理投票结果" };
       }
@@ -1636,7 +1631,16 @@
     const sheriffBadge = room.sheriffBadge || { holderSeat: 0, lost: false };
     const dayVote = room.dayVoteRecord && room.dayVoteRecord.day === room.night ? room.dayVoteRecord : null;
     const sheriffElectionDone = isSheriffElectionFinished(room);
-    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night);
+    const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night && record.phase === "DAYBREAK");
+    const exileRecorded = (room.exileRecords || []).some((record) => record.day === room.night);
+    const canEnterJudgeNextNight = canRunDayActions
+      && daybreakRecorded
+      && exileRecorded
+      && !room.pendingNightResolution
+      && !pendingExileResult
+      && !room.orderPrinceRevotePending
+      && !pendingDelayedDeaths.length
+      && !pendingDeathSkills.length;
     const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && !daybreakRecorded;
     const canRunDayActions = room.phase === "DAY" && isJudge;
     const pendingExileResult = room.pendingExileResult || null;
@@ -1666,7 +1670,7 @@
       canRunDayActions && !pendingExileResult ? `<button class="button" data-action="view" data-view="dayVote">${room.orderPrinceRevotePending ? "记录回溯重投" : "记录放逐投票"}</button>` : "",
       canRunDayActions && !pendingExileResult ? '<button class="button primary" data-action="view" data-view="exile">手动记录放逐</button>' : "",
       room.mode === "SYSTEM" && isController && room.phase === "DAY" && !room.systemDaybreakReady ? '<button class="button" data-action="view" data-view="exile">记录白天出局</button>' : "",
-      canRunDayActions && !pendingExileResult && !room.orderPrinceRevotePending && !room.pendingNightResolution && !pendingDelayedDeaths.length && !pendingDeathSkills.length ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
+      canEnterJudgeNextNight ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.mode === "SYSTEM" && isController && room.phase === "DAY" && room.systemDayOutcomeRecorded && !room.systemDaybreakReady && !(room.systemPendingTasks?.delayedDeaths || room.systemPendingTasks?.deathSkills) ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.phase === "NIGHT" && (canControl || room.systemNight?.canAct) ? `<button class="button ${room.systemNight?.canAct ? "primary" : ""}" data-action="view" data-view="night">${room.systemNight?.canAct ? "轮到我行动" : "进入夜间播报"}</button>` : "",
       room.phase === "WAITING" && canControl ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""

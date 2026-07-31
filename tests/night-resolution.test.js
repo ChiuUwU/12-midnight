@@ -80,10 +80,10 @@ async function newMechanicalRoom() {
   const dealt = await post(`/api/rooms/${id}/deal`, auth);
   const wolfTarget = dealt.body.room.assignments.find((item) => item.roleId === "villager").seat;
   await runMechanicalNight(id, clientId, judgeToken, { wolfTarget, useAntidote: true });
-  await post(`/api/rooms/${id}/sheriff-candidates`, { ...auth, seats: [1] });
-  await post(`/api/rooms/${id}/sheriff-withdraw`, { ...auth, seats: [1] });
   const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] });
   assert.equal(death.status, 200);
+  const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true });
+  assert.equal(exile.status, 200);
   return { clientId, id, judgeToken };
 }
 
@@ -123,13 +123,30 @@ test("backend keeps explicit reasons private and stores authoritative fallback r
   assert.equal(publicRoom.room.pendingNightResolution, null);
 });
 
-test("judge mode can start the next night without completing optional day records", async () => {
-  const { clientId, id, judgeToken } = await newMechanicalRoom();
-  await runMechanicalNight(id, clientId, judgeToken, { wolfTarget: 4 });
-  const started = await post(`/api/rooms/${id}/night-start`, { clientId, judgeToken });
+test("judge mode requires death and exile records, but not optional sheriff records", async () => {
+  const clientId = `judge-day-${Date.now()}-${crypto.randomInt(10000)}`;
+  const created = await post("/api/rooms", { clientId, boardId: "mechanical_wolf_spirit_medium" });
+  const id = created.body.room.id;
+  const judgeToken = created.body.judgeToken;
+  const auth = { clientId, judgeToken };
+  await post(`/api/rooms/${id}/fill-test`, auth);
+  const dealt = await post(`/api/rooms/${id}/deal`, auth);
+  const wolfTarget = dealt.body.room.assignments.find((item) => item.roleId === "villager").seat;
+  await runMechanicalNight(id, clientId, judgeToken, { wolfTarget });
+
+  let started = await post(`/api/rooms/${id}/night-start`, auth);
+  assert.equal(started.status, 400);
+  const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [wolfTarget] });
+  assert.equal(death.status, 200);
+  started = await post(`/api/rooms/${id}/night-start`, auth);
+  assert.equal(started.status, 400);
+  const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true });
+  assert.equal(exile.status, 200);
+  started = await post(`/api/rooms/${id}/night-start`, auth);
   assert.equal(started.status, 200);
   assert.equal(started.body.room.phase, "NIGHT");
-  assert.equal(started.body.room.night, 3);
+  assert.equal(started.body.room.night, 2);
+  assert.deepEqual(started.body.room.sheriffCandidates, []);
 });
 
 test("backend resolves hunter shot and publishes an exiled idiot", async () => {
