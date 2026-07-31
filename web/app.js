@@ -1633,6 +1633,11 @@
     const sheriffElectionDone = isSheriffElectionFinished(room);
     const daybreakRecorded = (room.deathRecords || []).some((record) => record.day === room.night && record.phase === "DAYBREAK");
     const exileRecorded = (room.exileRecords || []).some((record) => record.day === room.night);
+    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && !daybreakRecorded;
+    const canRunDayActions = room.phase === "DAY" && isJudge;
+    const pendingExileResult = room.pendingExileResult || null;
+    const pendingDelayedDeaths = room.myDelayedDeath ? [room.myDelayedDeath] : (room.pendingDelayedDeaths || []).filter((item) => item.day === room.night);
+    const pendingDeathSkills = room.myDeathSkill ? [room.myDeathSkill] : (room.pendingDeathSkills || []).filter((item) => item.day === room.night);
     const canEnterJudgeNextNight = canRunDayActions
       && daybreakRecorded
       && exileRecorded
@@ -1641,11 +1646,6 @@
       && !room.orderPrinceRevotePending
       && !pendingDelayedDeaths.length
       && !pendingDeathSkills.length;
-    const canRecordDaybreakDeaths = room.phase === "DAY" && isJudge && !daybreakRecorded;
-    const canRunDayActions = room.phase === "DAY" && isJudge;
-    const pendingExileResult = room.pendingExileResult || null;
-    const pendingDelayedDeaths = room.myDelayedDeath ? [room.myDelayedDeath] : (room.pendingDelayedDeaths || []).filter((item) => item.day === room.night);
-    const pendingDeathSkills = room.myDeathSkill ? [room.myDeathSkill] : (room.pendingDeathSkills || []).filter((item) => item.day === room.night);
     const publicReveals = IS_REMOTE ? room.publicReveals || [] : (room.assignments || []).filter((assignment) => assignment.revealed && assignment.roleId === "idiot");
     const suggestedDeaths = canRecordDaybreakDeaths ? calculateSuggestedDeaths(room, room.night) : [];
     const canSelfWithdraw = !isJudge && room.phase === "DAY" && room.night === 1 && mySeat && sheriffCandidates.includes(mySeat.seat) && !sheriffWithdrawn.includes(mySeat.seat);
