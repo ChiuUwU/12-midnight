@@ -96,7 +96,7 @@
         { roleId: "wolf", count: 4, camp: "WOLF" }
       ],
       roleSummary: "预言家 · 女巫 · 猎人 · 白痴 · 混血儿 · 平民×3 · 狼人×4",
-      tagline: "经典开局，混血未定。十二人长夜由此展开。",
+      tagline: "混血择主，阵营未定。长夜之后，谁与谁同路？",
       globalRules: DEFAULT_RULES
     },
     {
@@ -113,7 +113,7 @@
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
       roleSummary: "预言家 · 女巫 · 舞者 · 白痴 · 假面 · 平民×4 · 狼人×3",
-      tagline: "假面轻覆，舞池暗涌。三步入局，一步出局。",
+      tagline: "假面覆面，舞池暗涌。谁在共舞，谁将离场？",
       globalRules: DEFAULT_RULES
     },
     {
@@ -132,7 +132,7 @@
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
       roleSummary: "通灵师 · 毒师 · 猎人 · 摄梦人 · 蒙面人 · 盗宝大师 · 平民×5 · 狼王 · 狼人×3",
-      tagline: "三牌在手，一夜一变。盗宝之人，今日为谁？",
+      tagline: "盗宝入局，三牌在手。夜夜换招，步步为局。",
       globalRules: DEFAULT_RULES,
       specialRules: {
         treasureMaster: {
@@ -157,7 +157,7 @@
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
       roleSummary: "通灵师 · 女巫 · 猎人 · 守卫 · 机械狼 · 平民×4 · 狼人×3",
-      tagline: "机械模仿，通灵辨真。真假之间，谁在演戏？",
+      tagline: "机械模仿，通灵辨真。借技入夜，局势生变。",
       globalRules: DEFAULT_RULES
     },
     {
@@ -174,7 +174,7 @@
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
       roleSummary: "预言家 · 女巫 · 魔术师 · 定序王子 · 诡术师 · 平民×4 · 狼人×3",
-      tagline: "换号颠倒，回溯归零。十二人局，眼见为虚。",
+      tagline: "魔幻对决，回溯归零。眼见为虚，真相错位。",
       globalRules: DEFAULT_RULES
     },
     {
@@ -191,7 +191,7 @@
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
       roleSummary: "预言家 · 女巫 · 船长 · 白痴 · 海妖 · 平民×4 · 狼人×3",
-      tagline: "海妖控风，船长掌船。十二人迷雾中航向黎明。",
+      tagline: "海妖控风，船长掌船。迷雾中航向黎明。",
       globalRules: DEFAULT_RULES
     },
     {
@@ -208,7 +208,7 @@
         { roleId: "wolf", count: 2, camp: "WOLF" }
       ],
       roleSummary: "预言家 · 女巫 · 守卫 · 猎人 · 平民×5 · 狼王 · 狼人×2",
-      tagline: "首夜狼队在相邻座位中选择一名不知情的傀儡。",
+      tagline: "环座相邻，傀儡暗藏。三狼合谋，左右皆疑。",
       globalRules: DEFAULT_RULES
     }
   ];
@@ -865,6 +865,14 @@
   function getWitchAntidoteTarget(room) {
     return Number(room?.systemNight?.privateContext?.wolfVictimSeat || 0)
       || getNightActionTarget(room, "wolves_kill", room.night);
+  }
+
+  function canChooseWitchAntidote(room, step) {
+    if (!step?.antidoteAvailable) return false;
+    const targetSeat = getWitchAntidoteTarget(room);
+    if (!targetSeat) return false;
+    const witchSeat = (room?.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
+    return room.night !== 1 || targetSeat !== witchSeat;
   }
 
   function formatNightAction(action) {
@@ -1849,6 +1857,7 @@
     const currentNightActions = (room.nightActions || []).filter((action) => action.night === room.night);
     const suggestedDeaths = isJudge ? calculateSuggestedDeaths(room, room.night) : [];
     const witchAntidoteTarget = step && ["witch_action", "witch_antidote"].includes(step.id) ? getWitchAntidoteTarget(room) : 0;
+    const witchCanChooseAntidote = step && step.id === "witch_action" && canChooseWitchAntidote(room, step);
     const nightSubmitLabel = step && step.id === "witch_antidote" ? "救" : step && step.id === "witch_poison" ? "使用毒药" : "确认记录";
     const nightSkipLabel = step && step.id === "witch_antidote" ? "不救" : step && step.id === "witch_poison" ? "不使用毒药" : "空过";
 
@@ -1882,12 +1891,12 @@
       </section>
 
       ${step.id === "witch_action" ? `
-        ${step.antidoteAvailable ? `
+        ${witchCanChooseAntidote ? `
           <section class="panel">
             <div class="label">解药</div>
             <div class="value">今晚被击杀：${witchAntidoteTarget ? `${witchAntidoteTarget}号` : "无人"}</div>
             <div class="segmented witch-choice-row">
-              <button class="segment" data-action="witch-antidote-choice" data-use="true" ${witchAntidoteTarget && !(room.night === 1 && room.assignments.some((item) => item.roleId === "witch" && item.seat === witchAntidoteTarget)) ? "" : "disabled"}>救</button>
+              <button class="segment" data-action="witch-antidote-choice" data-use="true">救</button>
               <button class="segment" data-action="witch-antidote-choice" data-use="false">不救</button>
             </div>
           </section>
@@ -2064,14 +2073,6 @@
     if (!room) return setView("home");
     const isJudge = !IS_REMOTE || room.isJudge;
     if (!isJudge) return setView("room");
-    if (!isSheriffElectionFinished(room)) {
-      app.innerHTML = `
-        ${pageHeader("记录天亮死亡", "请先完成警长竞选")}
-        <section class="panel"><div class="body-text">第一天死亡结果应在警下公布。请先记录上警、退水和警徽结果，再回到这里公布死亡。</div></section>
-        <button class="button" data-action="view" data-view="room">返回房间</button>
-      `;
-      return;
-    }
     const draftSeats = state.deathDraftSeats || [];
     const draftReasons = state.deathDraftReasons || {};
     const reasonsHtml = draftSeats.length ? `
@@ -2566,19 +2567,15 @@
       const step = room.currentNightSteps[room.currentNightStepIndex || 0];
       if (!step || step.id !== "witch_action") return;
       const antidoteChoice = app.querySelector("[data-action='witch-antidote-choice'].active");
-      if (step.antidoteAvailable && !antidoteChoice) {
+      const canChooseAntidote = canChooseWitchAntidote(room, step);
+      if (canChooseAntidote && !antidoteChoice) {
         window.alert("请选择救或不救");
         return;
       }
-      const antidoteUsed = step.antidoteAvailable && antidoteChoice && antidoteChoice.dataset.use === "true";
+      const antidoteUsed = canChooseAntidote && antidoteChoice && antidoteChoice.dataset.use === "true";
       const antidoteTargetSeat = antidoteUsed ? getWitchAntidoteTarget(room) : 0;
       if (antidoteUsed && !antidoteTargetSeat) {
         window.alert("今晚无人被击杀，不能使用解药");
-        return;
-      }
-      const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
-      if (antidoteUsed && room.night === 1 && antidoteTargetSeat === witchSeat) {
-        window.alert("女巫首夜不能自救");
         return;
       }
       const usePoison = target.dataset.usePoison === "true";
@@ -3372,7 +3369,7 @@
   if (IS_REMOTE) {
     setInterval(() => {
       if (!state.currentRoomId || !AUTO_REFRESH_VIEWS.includes(state.view)) return;
-      if (state.view === "night" && state.remoteRoom?.systemNight?.canAct) return;
+      if (state.view === "night" && (state.remoteRoom?.isJudge || state.remoteRoom?.systemNight?.canAct)) return;
       refreshRemoteRoom()
         .then(render)
         .catch(() => {});

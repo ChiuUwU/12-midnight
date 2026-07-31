@@ -1026,7 +1026,6 @@ async function handleApi(request, response, url) {
   if (target.action === "death-record") {
     if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录死亡");
     if (room.phase !== "DAY") return sendError(response, 400, "当前阶段不能记录天亮死亡");
-    if (!isSheriffElectionFinished(room)) return sendError(response, 400, "第一天死亡结果应在警长竞选结束后公布");
     const seats = Array.isArray(body.seats)
       ? [...new Set(body.seats.map(Number).filter((seat) => seat >= 1 && seat <= 12))].sort((a, b) => a - b)
       : [];
