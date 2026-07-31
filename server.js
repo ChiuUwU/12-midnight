@@ -627,6 +627,14 @@ function isSheriffElectionFinished(room) {
   return Boolean(record && (record.electedSeat || record.badgeLost));
 }
 
+function hasCurrentDaybreakRecord(room) {
+  return (room.deathRecords || []).some((record) => record.day === room.night && record.phase === "DAYBREAK");
+}
+
+function hasCurrentExileRecord(room) {
+  return (room.exileRecords || []).some((record) => record.day === room.night);
+}
+
 function calculateDayVote(room, body) {
   const round = Number(body.round || 1);
   const aliveSeats = getAliveSeats(room);
@@ -1227,9 +1235,11 @@ async function handleApi(request, response, url) {
   if (target.action === "night-start") {
     if (!isController(room, judgeToken)) return sendError(response, 403, "只有控制设备可以开始夜晚");
     if (room.phase !== "DEALT" && room.phase !== "DAY") return sendError(response, 400, "当前阶段不能开始夜晚");
-    if (room.mode === "SYSTEM") {
+    if (room.phase === "DAY") {
       if (room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成定序王子的投票流程");
-      if (room.phase === "DAY" && room.systemDayOutcomeRecordedDay !== room.night) return sendError(response, 400, "请先记录本日最终出局结果");
+      if (room.mode === "SYSTEM" && room.systemDayOutcomeRecordedDay !== room.night) return sendError(response, 400, "请先记录本日最终出局结果");
+      if (room.mode === "JUDGE" && !hasCurrentDaybreakRecord(room)) return sendError(response, 400, "请先公布天亮死亡结果");
+      if (room.mode === "JUDGE" && !hasCurrentExileRecord(room)) return sendError(response, 400, "请先记录本日放逐结果");
       if (room.pendingNightResolution) return sendError(response, 400, "请先确认天亮死亡名单");
       if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理蒙面人的延迟死亡");
       if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理死亡技能");
