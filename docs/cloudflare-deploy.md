@@ -35,6 +35,13 @@ npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
 
 以后 `db/schema.sql` 增加表或索引时，应在发布新代码前重新执行第 5 步。当前 Function 会在首次记录对局结果时自动补建 `game_results` 表，但预先执行完整 schema 仍是推荐流程。
 
+## 发布与缓存规范
+
+1. 功能分支通过 PR 合并到 `main`；Cloudflare Pages 自动触发生产部署。
+2. 每次修改 `web/` 中会被浏览器长期复用的脚本、样式或页面资源时，同步更新 `web/index.html` 的资源版本参数，使用清晰的发布标识，例如 `20260810-release-hygiene`。
+3. 部署后确认线上首页、`app.js` 和接口均返回预期内容；不能只以 GitHub 合并成功作为发布完成。
+4. 出现线上回归时，优先通过回滚 `main` 的对应提交恢复，不直接以本地未提交文件覆盖生产。
+
 ## 部署后怎么用
 
 打开 Cloudflare Pages 给你的网址，例如：
@@ -49,4 +56,4 @@ https://12-midnight.pages.dev
 
 - D1 保存的是整个房间 JSON，适合当前 MVP。后续如果房间量变大，再拆成多张表。
 - 现在没有实时 WebSocket，前端靠刷新/自动轮询拿最新房间状态。
-- 夜间行动仍是记录器，不自动结算女巫、守卫、摄梦等复杂死亡结果。
+- 夜间行动和死亡建议由共享结算模块计算；法官确认公布结果。复杂规则仍需在真实浏览器流程中验收。
