@@ -18,6 +18,7 @@
 ## 文档
 
 - [产品规则规格](./docs/product-rules-v0.1.md)
+- [当前状态与发布基线](./docs/current-status.md)
 - [规则数据结构草案](./docs/rule-data-structure-v0.1.md)
 - [页面流程](./docs/app-flow-v0.1.md)
 - [MVP 开发清单](./docs/mvp-build-plan-v0.1.md)
@@ -38,7 +39,7 @@
 
 ## 开发原则
 
-第一版先做可用闭环，不追求完整自动法官结算。复杂结算允许法官手动确认，但必须保留操作记录，方便复盘。
+当前版本已提供夜间规则结算与法官确认闭环；复杂规则仍应通过真实浏览器流程验收。历史 MVP 规划仅用于追溯，当前实现和发布状态以 [当前状态与发布基线](./docs/current-status.md) 为准。
 
 ## 预览
 
