@@ -76,8 +76,8 @@ const BOARDS = [
     specialRules: {
       treasureMaster: {
         fixedCards: ["wolf", "villager"],
-        godCardPoolExcludes: ["masked_man"],
-        allowMaskedManInTreasureCards: false,
+        godCardPoolExcludes: [],
+        allowMaskedManInTreasureCards: true,
         firstNightWolfKillDisabled: true
       }
     }
@@ -400,6 +400,13 @@ function currentTreasureCard(room, night = room && room.night) {
   return (room && room.nightActions || []).find((item) => item.night === night && item.stepId === "treasure_pick" && !item.skipped)?.cardRoleId || "";
 }
 
+function shouldStartTreasureMaskedFinalNight(room, assignment) {
+  return room.boardId === "treasure_master"
+    && assignment?.roleId === "treasure_master"
+    && currentTreasureCard(room, room.night) === "masked_man"
+    && !(room.assignments || []).some((item) => item.alive !== false && ["wolf", "wolf_king"].includes(item.roleId));
+}
+
 function mechanicalSkillStep(room, night) {
   const roleId = previousMechanicalRole(room, night);
   const configs = {
@@ -438,6 +445,12 @@ function getFollowNeighborPuppetSeats(room) {
 function createNightSteps(boardId, night, room = null) {
   const firstNight = night === 1;
   const steps = [];
+  if (room?.treasureMaskedFinalNight?.status === "PENDING") {
+    const dreamerAlive = (room.assignments || []).some((item) => item.roleId === "dreamer" && item.alive !== false);
+    if (dreamerAlive) steps.push({ id: "dreamer_dream", actor: "dreamer", label: "摄梦人选择摄梦目标", targetCount: 1, allowSkip: false });
+    steps.push({ id: "treasure_mask_final_kill", actor: "treasure_mask_final", label: "盗宝蒙面狼进行濒死最终刀", targetCount: 1, allowSkip: false });
+    return steps;
+  }
   if (boardId === "follow_neighbor") {
     const witchStep = createWitchStep(room);
     steps.push({ id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true });
@@ -699,7 +712,11 @@ function getWolfTeamRoleIds(boardId) {
 }
 
 function canAssignmentAct(room, step, assignment) {
-  if (!step || !assignment || assignment.alive === false) return false;
+  if (!step || !assignment) return false;
+  if (step.id === "treasure_mask_final_kill") {
+    return assignment.roleId === "treasure_master" && Number(assignment.seat) === Number(room.treasureMaskedFinalNight?.seat);
+  }
+  if (assignment.alive === false) return false;
   if (step.actor === "wolf_team") return getWolfTeamRoleIds(room.boardId).includes(assignment.roleId);
   return step.actor === assignment.roleId;
 }
@@ -803,6 +820,9 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     } : null,
     myDelayedDeath: room.mode === "SYSTEM" ? myDelayedDeath : null,
     myDeathSkill: room.mode === "SYSTEM" ? myDeathSkill : null,
+    myTreasureMaskedFinalNight: room.mode === "SYSTEM" && myAssignment && Number(room.treasureMaskedFinalNight?.seat) === Number(myAssignment.seat)
+      && ["PENDING", "ACTIVE"].includes(room.treasureMaskedFinalNight?.status)
+      ? { status: room.treasureMaskedFinalNight.status } : null,
     latestPublicAnnouncement: (room.publicAnnouncements || []).at(-1) || null,
     gameOutcome: room.phase === "GAME_OVER" ? room.gameOutcome || null : null,
     mySeat: mySeat ? { seat: mySeat.seat, nickname: mySeat.nickname, occupied: true } : null,
@@ -873,6 +893,7 @@ function queueDeathSkills(room, seats, phase, reasonsBySeat = {}) {
 
 function maybeCompleteSystemGame(room) {
   if (room.mode !== "SYSTEM" || room.phase === "GAME_OVER" || room.pendingNightResolution) return null;
+  if (["PENDING", "ACTIVE"].includes(room.treasureMaskedFinalNight?.status)) return null;
   if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return null;
   if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return null;
   const result = getGameOutcome(room);
@@ -893,6 +914,7 @@ function beginNight(room) {
   room.captainAliveAtDawn = (room.assignments || []).some((item) => item.roleId === "captain" && item.alive !== false);
   room.captainDiedLastDay = false;
   room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
+  if (room.treasureMaskedFinalNight?.status === "PENDING") room.treasureMaskedFinalNight.status = "ACTIVE";
   room.currentNightStepIndex = 0;
   room.systemAnnouncementNotBefore = 0;
   room.pendingNightResolution = null;
@@ -988,7 +1010,12 @@ function finalizeDayVote(room, record, source = "DAY_VOTE") {
       assignment.alive = false;
       if (assignment.roleId === "idiot") assignment.revealed = true;
     }
-    queueDeathSkills(room, [actualExiledSeat], "EXILE");
+    if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
+      room.treasureMaskedFinalNight = { seat: actualExiledSeat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
+      writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
+    } else {
+      queueDeathSkills(room, [actualExiledSeat], "EXILE");
+    }
   }
   const exileRecord = { day: room.night, seat: actualExiledSeat, rawSeat: rawExiledSeat, noExile: record.noExile, source, createdAt: Date.now() };
   room.exileRecords.push(exileRecord);
@@ -1313,6 +1340,11 @@ async function handleRoomAction(request, env, route) {
     if ((room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length) return error(400, "仍有夜间身份尚未行动");
     room.phase = "DAY";
     room.pendingNightResolution = calculateNightResolution(room, room.night);
+    if (room.treasureMaskedFinalNight?.status === "ACTIVE") {
+      room.treasureMaskedFinalNight.status = "RESOLVED";
+      room.treasureMaskedFinalNight.resolvedAt = Date.now();
+      writeLog(room, "TREASURE_MASK_FINAL_NIGHT_RESOLVED", room.treasureMaskedFinalNight);
+    }
     writeLog(room, "NIGHT_FINISHED", { night: room.night });
   } else if (route.action === "system-publish-daybreak") {
     if (room.mode !== "SYSTEM" || !isController(room, judgeToken)) return error(403, "只有公共控制设备可以公布死讯");
@@ -1557,7 +1589,12 @@ async function handleRoomAction(request, env, route) {
         assignment.alive = false;
         if (assignment.roleId === "idiot") assignment.revealed = true;
       }
-      queueDeathSkills(room, [seat], "EXILE");
+      if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
+        room.treasureMaskedFinalNight = { seat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
+        writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
+      } else {
+        queueDeathSkills(room, [seat], "EXILE");
+      }
     }
     const record = { day: room.night, seat: noExile ? 0 : seat, noExile, createdAt: Date.now() };
     room.exileRecords.push(record);

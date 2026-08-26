@@ -66,8 +66,8 @@ const BOARDS = [
     specialRules: {
       treasureMaster: {
         fixedCards: ["wolf", "villager"],
-        godCardPoolExcludes: ["masked_man"],
-        allowMaskedManInTreasureCards: false,
+        godCardPoolExcludes: [],
+        allowMaskedManInTreasureCards: true,
         firstNightWolfKillDisabled: true
       }
     }

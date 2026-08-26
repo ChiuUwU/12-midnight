@@ -39,7 +39,7 @@ test("ordinary board role counts remain unchanged", () => {
   });
 });
 
-test("treasure master keeps wolf, villager and one allowed god card", () => {
+test("treasure master keeps wolf, villager and one god card including masked man", () => {
   const result = deal("treasure_master");
   const treasure = result.assignments.find((assignment) => assignment.roleId === "treasure_master");
   const cards = treasure.abilityState.treasureCards;
@@ -48,7 +48,13 @@ test("treasure master keeps wolf, villager and one allowed god card", () => {
   assert.ok(cards.includes("villager"));
   const god = cards.find((roleId) => !["wolf", "villager"].includes(roleId));
   assert.ok(god);
-  assert.notEqual(god, "masked_man");
+  assert.ok(["spirit_medium", "poisoner", "hunter", "dreamer", "masked_man"].includes(god));
+});
+
+test("treasure master can draw the masked man card", () => {
+  const drawnCards = new Set(Array.from({ length: 300 }, () => deal("treasure_master", [], 1).assignments
+    .find((assignment) => assignment.roleId === "treasure_master").abilityState.treasureCards[2]));
+  assert.ok(drawnCards.has("masked_man"));
 });
 
 test("history is capped at ten games across rooms and boards", () => {

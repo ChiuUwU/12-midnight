@@ -240,8 +240,8 @@ const boardTreasureMaster = {
   specialRules: {
     treasureMaster: {
       fixedCards: ["wolf", "villager"],
-      godCardPoolExcludes: ["masked_man"],
-      allowMaskedManInTreasureCards: false,
+      godCardPoolExcludes: [],
+      allowMaskedManInTreasureCards: true,
       firstNightWolfKillDisabled: true,
     },
   },
@@ -252,7 +252,7 @@ const boardTreasureMaster = {
 
 1. 固定生成盗宝大师玩家牌。
 2. 从 `deckPool` 中移除盗宝牌：狼人、平民、1 张神职牌。
-3. 当前神职牌池排除蒙面人。
+3. 神职牌池包含蒙面人。
 4. 将盗宝大师玩家牌与 `deckPool` 剩余 11 张牌组成 12 张场上玩家牌。
 5. 随机分配给 12 个座位。
 6. 将被移除的 3 张牌写入盗宝大师的 `treasureCards`。
@@ -343,7 +343,7 @@ interface PendingExileResult {
 
 1. 先固定生成 1 张盗宝大师玩家牌。
 2. 从基础身份池中选出 3 张盗宝牌：狼人、平民、1 张神职牌。
-3. 当前神职牌池排除蒙面人。
+3. 神职牌池包含蒙面人。
 4. 从基础身份池中移除这 3 张盗宝牌。
 5. 将盗宝大师玩家牌与基础身份池剩余 11 张牌组成 12 张场上玩家牌。
 6. 随机分配场上身份。

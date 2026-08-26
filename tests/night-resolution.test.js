@@ -312,6 +312,27 @@ test("calculator separates masked delayed death and treasure skills", () => {
   assert.deepEqual(calculateSuggestedDeaths(treasure), [{ seat: 7, reasons: ["毒师毒"] }]);
 });
 
+test("treasure masked final knife uses normal wolf-kill protection and treasure mask delays death", () => {
+  const finalKnife = resolutionRoom("treasure_master", [
+    { night: 2, stepId: "dreamer_dream", targetSeats: [7] },
+    { night: 2, stepId: "treasure_mask_final_kill", targetSeats: [7] }
+  ], { assignments: [
+    { seat: 6, roleId: "treasure_master", camp: "WOLF", alive: false },
+    { seat: 7, roleId: "villager", camp: "GOOD", alive: true },
+    { seat: 8, roleId: "dreamer", camp: "GOOD", alive: true }
+  ] });
+  assert.deepEqual(calculateNightResolution(finalKnife), { deaths: [], delayedDeaths: [] });
+
+  const delayedTreasureMask = resolutionRoom("treasure_master", [
+    { night: 2, stepId: "treasure_pick", cardRoleId: "masked_man" },
+    { night: 2, stepId: "wolves_kill", targetSeats: [6] }
+  ], { assignments: [{ seat: 6, roleId: "treasure_master", camp: "WOLF", alive: true }] });
+  assert.deepEqual(calculateNightResolution(delayedTreasureMask), {
+    deaths: [],
+    delayedDeaths: [{ seat: 6, reasons: ["狼刀"], trigger: "AFTER_SPEECH" }]
+  });
+});
+
 test("death skills enforce poison, last-god and last-wolf restrictions", () => {
   const room = resolutionRoom("pre_witch_hunter_idiot_mixed", [], {
     assignments: [
