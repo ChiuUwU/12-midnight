@@ -10,6 +10,11 @@
   const DEFAULT_CANDIDATE_COUNT = 2000;
   const TEMPERATURE = 3;
   const FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT = 8;
+  const TREASURE_MASTER_MEDIAN_PENALTY_WEIGHT = 0.45;
+  const TREASURE_MASTER_WOLF_TOLERANCE_RATIO = 0.08;
+  const TREASURE_MASTER_WOLF_SEVERE_RATIO = 0.16;
+  const TREASURE_MASTER_WOLF_DEFICIT_WEIGHT = 1.5;
+  const TREASURE_MASTER_WOLF_SEVERE_DEFICIT_WEIGHT = 4;
   const KEY_ROLE_PAIRS = {
     masquerade: ["dancer", "mask"],
     realm_of_trickery: ["magician", "trickster"],
@@ -18,6 +23,13 @@
 
   function average(values) {
     return values.length ? values.reduce((sum, value) => sum + value, 0) / values.length : 0;
+  }
+
+  function median(values) {
+    if (!values.length) return 0;
+    const sorted = values.slice().sort((left, right) => left - right);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
   }
 
   function shuffle(values, randomInt) {
@@ -70,6 +82,25 @@
       ? treasure.abilityState.treasureCards
       : [];
     return cards.find((roleId) => !["wolf", "villager"].includes(roleId)) || "";
+  }
+
+  function getTreasureMasterStrengthStats(assignments, skills) {
+    const treasure = assignments.find((assignment) => assignment.roleId === "treasure_master");
+    if (!treasure) return null;
+    const treasureSkill = skills[treasure.seat - 1];
+    const otherWolfSkills = assignments
+      .filter((assignment) => assignment.camp === "WOLF" && assignment.seat !== treasure.seat)
+      .map((assignment) => skills[assignment.seat - 1]);
+    const skillMedian = median(skills);
+    const skillSpan = Math.max(...skills) - Math.min(...skills);
+    const otherWolfAverage = average(otherWolfSkills);
+    return {
+      treasureSkill,
+      otherWolfAverage,
+      skillMedian,
+      skillSpan,
+      wolfDeficit: Math.max(0, otherWolfAverage - treasureSkill)
+    };
   }
 
   function normalizeHistory(history) {
@@ -195,6 +226,7 @@
     }
 
     let specialPenalty = 0;
+    let treasureRolePenalty = 0;
     if (boardId === "treasure_master") {
       const treasureGod = getTreasureGod(assignments);
       const recentTreasure = history.filter((game) => game.boardId === "treasure_master").slice(-4);
@@ -202,6 +234,18 @@
       specialPenalty += recentCount * 3;
       if (recentTreasure.length && recentTreasure[recentTreasure.length - 1].treasureGodId === treasureGod) specialPenalty += 10;
       if (recentCount >= 3) specialPenalty += 8;
+
+      const treasureStrength = getTreasureMasterStrengthStats(assignments, context.skills);
+      if (treasureStrength) {
+        const medianDeficit = Math.max(0, treasureStrength.skillMedian - treasureStrength.treasureSkill);
+        const tolerance = treasureStrength.skillSpan * TREASURE_MASTER_WOLF_TOLERANCE_RATIO;
+        const severeThreshold = treasureStrength.skillSpan * TREASURE_MASTER_WOLF_SEVERE_RATIO;
+        const toleratedWolfDeficit = Math.max(0, treasureStrength.wolfDeficit - tolerance);
+        const severeWolfDeficit = Math.max(0, treasureStrength.wolfDeficit - severeThreshold);
+        treasureRolePenalty += TREASURE_MASTER_MEDIAN_PENALTY_WEIGHT * medianDeficit;
+        treasureRolePenalty += TREASURE_MASTER_WOLF_DEFICIT_WEIGHT * toleratedWolfDeficit;
+        treasureRolePenalty += TREASURE_MASTER_WOLF_SEVERE_DEFICIT_WEIGHT * severeWolfDeficit;
+      }
     }
 
     const followNeighborStats = boardId === "follow_neighbor" ? getFollowNeighborStats(assignments) : null;
@@ -210,8 +254,8 @@
       : 0;
 
     return {
-      totalPenalty: historyPenalty + strengthPenalty + layoutPenalty + pairDriftPenalty + keyRolePenalty + specialPenalty + adjacentGodPenalty,
-      components: { historyPenalty, strengthPenalty, layoutPenalty, pairDriftPenalty, keyRolePenalty, specialPenalty, adjacentGodPenalty },
+      totalPenalty: historyPenalty + strengthPenalty + layoutPenalty + pairDriftPenalty + keyRolePenalty + specialPenalty + treasureRolePenalty + adjacentGodPenalty,
+      components: { historyPenalty, strengthPenalty, layoutPenalty, pairDriftPenalty, keyRolePenalty, specialPenalty, treasureRolePenalty, adjacentGodPenalty },
       followNeighbor: followNeighborStats,
       averages: { wolf: wolfAverage, good: goodAverage, god: godAverage }
     };
@@ -276,6 +320,16 @@
     createHistoryEntry,
     getFollowNeighborStats,
     scoreCandidate,
-    constants: { HISTORY_LIMIT, DEFAULT_CANDIDATE_COUNT, TEMPERATURE, FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT }
+    constants: {
+      HISTORY_LIMIT,
+      DEFAULT_CANDIDATE_COUNT,
+      TEMPERATURE,
+      FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT,
+      TREASURE_MASTER_MEDIAN_PENALTY_WEIGHT,
+      TREASURE_MASTER_WOLF_TOLERANCE_RATIO,
+      TREASURE_MASTER_WOLF_SEVERE_RATIO,
+      TREASURE_MASTER_WOLF_DEFICIT_WEIGHT,
+      TREASURE_MASTER_WOLF_SEVERE_DEFICIT_WEIGHT
+    }
   };
 });

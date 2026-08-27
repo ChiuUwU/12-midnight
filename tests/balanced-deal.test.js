@@ -3,7 +3,7 @@ const assert = require("node:assert/strict");
 const crypto = require("node:crypto");
 const { BOARDS } = require("../miniprogram/data/boards");
 const { dealBoard } = require("../miniprogram/utils/deal");
-const { createBalancedDeal, getFollowNeighborStats } = require("../web/balanced-deal");
+const { createBalancedDeal, getFollowNeighborStats, scoreCandidate } = require("../web/balanced-deal");
 
 const seats = Array.from({ length: 12 }, (_, index) => index + 1);
 const randomInt = (maximum) => crypto.randomInt(maximum);
@@ -74,6 +74,32 @@ test("balance metadata records hidden strength and target inputs", () => {
   assert.ok(["WEAK", "EVEN", "SLIGHTLY_STRONG", "STRONG"].includes(result.meta.wolfTarget.type));
   assert.ok(["STANDARD", "RELAXED", "FREE"].includes(result.meta.keyRoleMode));
   assert.ok(result.meta.components.keyRolePenalty >= 0);
+});
+
+test("treasure master applies the hidden median and other-three-wolves soft constraint", () => {
+  const assignments = [
+    { seat: 1, roleId: "treasure_master", camp: "WOLF" },
+    { seat: 2, roleId: "wolf_king", camp: "WOLF" },
+    { seat: 3, roleId: "wolf", camp: "WOLF" },
+    { seat: 4, roleId: "wolf", camp: "WOLF" },
+    ...[5, 6, 7, 8, 9, 10, 11, 12].map((seat) => ({ seat, roleId: "villager", camp: "GOOD" }))
+  ];
+  const skills = [20, 30, 40, 50, 60, 70, 80, 90, 100, 60, 60, 60];
+  const zeroMatrix = Array.from({ length: 12 }, () => Array(12).fill(0));
+  const context = {
+    skills,
+    wolfTarget: { value: 0 },
+    referenceWolves: new Set([1, 2, 3, 4]),
+    pairOppositeCounts: zeroMatrix,
+    pairWolfWolfCounts: zeroMatrix,
+    pairHistoryLength: 0,
+    targetOppositeRate: 0,
+    targetWolfWolfRate: 0,
+    keyRoleMode: { coefficient: 0, threshold: 0 }
+  };
+  const score = scoreCandidate(assignments, "treasure_master", [], context);
+  // T=20, M=60, W=(30+40+50)/3=40, S=80: 0.45*40 + 1.5*(20-6.4) + 4*(20-12.8).
+  assert.ok(Math.abs(score.components.treasureRolePenalty - 67.2) < 0.000001);
 });
 
 test("Follow Neighbor keeps every wolf layout legal and scores unique adjacent gods", () => {
