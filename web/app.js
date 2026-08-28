@@ -1459,8 +1459,9 @@
           </div>
         </div>
         <div class="hero-copy">
-          <div class="eyebrow brand-name">最后一夜 <span class="brand-en">Last-Night</span></div>
-          <div class="brand-subtitle">狼人杀还有一万个夏天</div>
+          <div class="season-chip"><span>S2</span><span>回归基本功</span></div>
+          <div class="brand-title">最后一夜 <span class="brand-en">Last-Night</span></div>
+          <div class="brand-subtitle">回到桌前，重新开局。</div>
         </div>
       </section>
 
@@ -1491,7 +1492,7 @@
             <div class="label">固定版型</div>
             <div class="value">${BOARDS.length}套 12 人局</div>
           </div>
-          <span class="tag">MVP</span>
+          <span class="tag">S2</span>
         </div>
         <div class="list">
           ${BOARDS.map((board) => `<div class="list-item board-item"><div><div class="board-name">${board.name}</div><div class="board-meta">${board.roleSummary || "12 人 · 屠边 · 可上警"}</div></div><span class="tag">可发牌</span></div>`).join("")}

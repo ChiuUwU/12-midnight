@@ -47,9 +47,29 @@ select {
   grid-template-columns: 116px 1fr;
   align-items: center;
   gap: 18px;
-  min-height: 180px;
-  padding: 20px 2px 26px;
+  min-height: 230px;
+  overflow: hidden;
+  padding: 24px 20px 30px;
+  border: 1px solid rgba(231, 215, 189, 0.2);
+  border-radius: 18px;
+  background-color: #101114;
+  background-image:
+    linear-gradient(90deg, rgba(8, 9, 11, 0.62), rgba(8, 9, 11, 0.18) 58%, rgba(8, 9, 11, 0.72)),
+    linear-gradient(180deg, rgba(8, 9, 11, 0.1), rgba(8, 9, 11, 0.5)),
+    url("./assets/s2-return-to-basics-hero.png");
+  background-position: center, center, center 66%;
+  background-repeat: no-repeat;
+  background-size: cover;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
   color: #fff;
+}
+
+.home-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: radial-gradient(circle at 68% 18%, rgba(216, 176, 89, 0.13), transparent 31%);
 }
 
 .home-hero::after {
@@ -60,10 +80,12 @@ select {
   bottom: 10px;
   height: 1px;
   background: linear-gradient(90deg, transparent, rgba(231, 215, 189, 0.65), transparent);
+  z-index: 1;
 }
 
 .hero-art {
   position: relative;
+  z-index: 1;
   width: 116px;
   height: 116px;
 }
@@ -135,6 +157,33 @@ select {
 
 .hero-copy {
   min-width: 0;
+  position: relative;
+  z-index: 1;
+}
+
+.season-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: #ebd9b9;
+  font-size: 12px;
+  font-weight: 850;
+  letter-spacing: 0.08em;
+}
+
+.season-chip span:first-child {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  min-height: 20px;
+  padding: 0 6px;
+  border: 1px solid rgba(232, 203, 139, 0.7);
+  border-radius: 999px;
+  color: #17130d;
+  background: #e2bd71;
+  font-size: 11px;
+  letter-spacing: 0.04em;
 }
 
 .eyebrow {
@@ -749,8 +798,8 @@ select {
   .home-hero {
     grid-template-columns: 92px 1fr;
     gap: 14px;
-    min-height: 154px;
-    padding-top: 14px;
+    min-height: 202px;
+    padding: 18px 16px 24px;
   }
 
   .hero-art {
@@ -850,7 +899,8 @@ select {
   .home-hero {
     grid-template-columns: 78px 1fr;
     gap: 12px;
-    min-height: 136px;
+    min-height: 176px;
+    padding: 14px 12px 20px;
   }
 
   .hero-art {
@@ -881,6 +931,11 @@ select {
 
   .brand-subtitle {
     font-size: 13px;
+  }
+
+  .season-chip {
+    margin-bottom: 7px;
+    font-size: 11px;
   }
 
   .panel {
