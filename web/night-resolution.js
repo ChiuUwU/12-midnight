@@ -56,7 +56,7 @@
       deaths.set(seat, reasons);
     };
 
-    let wolfKill = mapNightSeat(room, firstTarget("wolves_kill"), night);
+    let wolfKill = mapNightSeat(room, firstTarget("treasure_mask_final_kill") || firstTarget("wolves_kill"), night);
     const witchAction = actions.find((item) => item.stepId === "witch_action");
     let antidote = mapNightSeat(room, witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote"), night);
     let witchPoison = mapNightSeat(room, witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison"), night);
@@ -164,7 +164,9 @@
 
     const delayedDeaths = [];
     [...deaths.entries()].forEach(([seat, reasons]) => {
-      if (roleAtSeat(seat) !== "masked_man") return;
+      const isTreasureMasked = roleAtSeat(seat) === "treasure_master"
+        && (room.nightActions || []).some((item) => item.night === night && item.stepId === "treasure_pick" && !item.skipped && item.cardRoleId === "masked_man");
+      if (roleAtSeat(seat) !== "masked_man" && !isTreasureMasked) return;
       delayedDeaths.push({ seat, reasons: [...reasons], trigger: "AFTER_SPEECH" });
       deaths.delete(seat);
     });

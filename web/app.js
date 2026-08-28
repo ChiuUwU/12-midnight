@@ -137,8 +137,8 @@
       specialRules: {
         treasureMaster: {
           fixedCards: ["wolf", "villager"],
-          godCardPoolExcludes: ["masked_man"],
-          allowMaskedManInTreasureCards: false,
+          godCardPoolExcludes: [],
+          allowMaskedManInTreasureCards: true,
           firstNightWolfKillDisabled: true
         }
       }
@@ -341,6 +341,13 @@
       || "";
   }
 
+  function shouldStartTreasureMaskedFinalNight(room, assignment) {
+    return room.boardId === "treasure_master"
+      && assignment?.roleId === "treasure_master"
+      && currentTreasureCard(room, room.night) === "masked_man"
+      && !(room.assignments || []).some((item) => item.alive !== false && ["wolf", "wolf_king"].includes(item.roleId));
+  }
+
   function mechanicalSkillStep(room, night) {
     const roleId = previousMechanicalRole(room, night);
     const configs = {
@@ -379,6 +386,12 @@
   function createNightSteps(boardId, night, room = null) {
     const firstNight = night === 1;
     const steps = [];
+    if (room?.treasureMaskedFinalNight?.status === "PENDING") {
+      const dreamerAlive = (room.assignments || []).some((item) => item.roleId === "dreamer" && item.alive !== false);
+      if (dreamerAlive) steps.push({ id: "dreamer_dream", actor: "dreamer", label: "摄梦人选择摄梦目标", targetCount: 1, allowSkip: false });
+      steps.push({ id: "treasure_mask_final_kill", actor: "treasure_mask_final", label: "盗宝蒙面狼进行濒死最终刀", targetCount: 1, allowSkip: false });
+      return steps;
+    }
     if (boardId === "follow_neighbor") {
       const witchStep = createWitchStep(room);
       steps.push({ id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true });
@@ -635,7 +648,9 @@
     });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error || "请求失败");
+      const error = new Error(data.error || "请求失败");
+      error.status = response.status;
+      throw error;
     }
     return data;
   }
@@ -665,17 +680,26 @@
   }
 
   async function remotePost(action, payload = {}) {
-    const data = await apiRequest(`/api/rooms/${state.currentRoomId}/${action}`, {
-      method: "POST",
-      body: JSON.stringify({
-        clientId: state.currentUserId,
-        judgeToken: currentJudgeToken(),
-        ...payload
-      })
-    });
-    state.remoteRoom = data.room;
-    saveState();
-    return data;
+    try {
+      const data = await apiRequest(`/api/rooms/${state.currentRoomId}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: state.currentUserId,
+          judgeToken: currentJudgeToken(),
+          expectedRevision: state.remoteRoom?.revision,
+          ...payload
+        })
+      });
+      state.remoteRoom = data.room;
+      saveState();
+      return data;
+    } catch (error) {
+      if (error.status === 409) {
+        await refreshRemoteRoom().catch(() => {});
+        render();
+      }
+      throw error;
+    }
   }
 
   function getBoard(boardId) {
@@ -807,7 +831,12 @@
         if (assignment.roleId === "idiot") assignment.revealed = true;
       }
       trackCaptainDeath(room, actualExiledSeat);
-      queueDeathSkills(room, [actualExiledSeat], "EXILE");
+      if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
+        room.treasureMaskedFinalNight = { seat: actualExiledSeat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
+        writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
+      } else {
+        queueDeathSkills(room, [actualExiledSeat], "EXILE");
+      }
     }
     const exileRecord = {
       day: room.night,
@@ -1488,6 +1517,16 @@
             ${BOARDS.map((board) => `<option value="${board.id}">${board.name}</option>`).join("")}
           </select>
         </label>
+        <label class="field hidden" id="systemTimeoutField">
+          <span class="label">夜间行动超时</span>
+          <select class="select" id="systemStepTimeout">
+            <option value="0">关闭</option>
+            <option value="60">60 秒</option>
+            <option value="90">90 秒</option>
+            <option value="120">120 秒</option>
+          </select>
+          <span class="notice">超时后仅由控制设备决定继续等待、重播或强制跳过。</span>
+        </label>
         <div class="body-text" id="boardTagline">${BOARDS[0].tagline || ""}</div>
       </section>
       <button class="button primary" data-action="create-room">创建</button>
@@ -1501,6 +1540,7 @@
       selectedMode = button.dataset.mode;
       app.querySelectorAll(".segment").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
+      app.querySelector("#systemTimeoutField").classList.toggle("hidden", selectedMode !== "SYSTEM");
     });
 
     app.querySelector("#boardSelect").addEventListener("change", (event) => {
@@ -1520,7 +1560,8 @@
               clientId: state.currentUserId,
               balanceProfileId: state.balanceProfileId,
               mode: selectedMode,
-              boardId: app.querySelector("#boardSelect").value
+              boardId: app.querySelector("#boardSelect").value,
+              systemStepTimeoutSeconds: Number(app.querySelector("#systemStepTimeout").value || 0)
             })
           });
           state.currentRoomId = data.room.id;
@@ -1652,6 +1693,18 @@
     const canSelfDestruct = IS_REMOTE && room.mode === "SYSTEM" && !canControl && room.phase === "DAY"
       && myAssignment?.alive !== false && myAssignment?.roleId !== "mixed_blood"
       && (myAssignment?.currentCamp || myAssignment?.camp) === "WOLF";
+    const systemTimeout = room.systemNight?.timeout || null;
+    const systemTimeoutRemaining = systemTimeout?.deadlineAt
+      ? Math.max(0, Math.ceil((systemTimeout.deadlineAt - Date.now()) / 1000))
+      : 0;
+    const controllerTransferActive = Boolean(
+      room.controllerTransferCode
+      && room.controllerTransferExpiresAt
+      && room.controllerTransferExpiresAt > Date.now(),
+    );
+    const treasureMaskedFinalNightNotice = room.myTreasureMaskedFinalNight
+      ? '<section class="panel danger-panel"><div class="label">濒死最终夜</div><div class="body-text">你将在本夜完成一次最终刀；你已不属于存活玩家，无法被摄梦人选择。</div></section>'
+      : "";
     const judgeNextStep = getJudgeNextStep(room);
     const mainActions = [
       room.phase === "WAITING" ? `<button class="button primary" data-action="deal" ${canDeal ? "" : "disabled"}>发牌</button>` : "",
@@ -1673,6 +1726,7 @@
       canEnterJudgeNextNight ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.mode === "SYSTEM" && isController && room.phase === "DAY" && room.systemDayOutcomeRecorded && !room.systemDaybreakReady && !(room.systemPendingTasks?.delayedDeaths || room.systemPendingTasks?.deathSkills) ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.phase === "NIGHT" && (canControl || room.systemNight?.canAct) ? `<button class="button ${room.systemNight?.canAct ? "primary" : ""}" data-action="view" data-view="night">${room.systemNight?.canAct ? "轮到我行动" : "进入夜间播报"}</button>` : "",
+      room.mode === "SYSTEM" && isController && systemTimeout?.expired ? '<button class="button danger" data-action="system-timeout-skip">超时：强制跳过当前步骤</button>' : "",
       room.phase === "WAITING" && canControl ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
     const infoActions = [
@@ -1712,12 +1766,29 @@
           <button class="button" data-action="claim-judge">进入法官席</button>
         </section>
       ` : ""}
+      ${IS_REMOTE && room.mode === "SYSTEM" && isController ? `
+        <section class="panel">
+          <div class="label">转让公共控制权</div>
+          <div class="body-text">发牌前转让后，你可以选择空座位；发牌后转让仅更换控制设备。</div>
+          ${controllerTransferActive ? `<div class="value">${room.controllerTransferCode}</div><div class="notice">转让码有效至 ${new Date(room.controllerTransferExpiresAt).toLocaleTimeString()}，使用一次即失效。</div>` : room.controllerTransferCode ? '<div class="notice">上一组转让码已过期，请重新生成。</div>' : ""}
+          <button class="button" data-action="controller-transfer-start">生成六位转让码</button>
+        </section>
+      ` : ""}
+      ${IS_REMOTE && room.mode === "SYSTEM" && !isController && !mySeat ? `
+        <section class="panel">
+          <div class="label">接管公共控制设备</div>
+          <input class="input" id="controllerTransferCodeInput" inputmode="numeric" maxlength="6" placeholder="输入 6 位转让码" />
+          <button class="button" data-action="controller-transfer-claim">接管控制权</button>
+        </section>
+      ` : ""}
+      ${treasureMaskedFinalNightNotice}
       <section class="panel">
         <div class="row">
           <div><div class="label">${canControl && IS_REMOTE ? "当前身份" : "当前座位"}</div><div class="value">${canControl && IS_REMOTE ? room.mode === "SYSTEM" ? "公共控制设备" : "法官席" : mySeat ? `${mySeat.seat}号` : "未选择"}</div></div>
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
         <div class="notice">${canControl ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
+        ${room.mode === "SYSTEM" && isController && systemTimeout?.seconds ? `<div class="notice">行动超时：${systemTimeout.expired ? "已超时" : `${systemTimeoutRemaining} 秒后提醒控制设备`}</div>` : ""}
         ${room.boardId === "dawn_voyage" && room.phase === "DAY" && (isJudge ? room.captainAliveAtDawn && room.windDirection : room.announcedWindDirection) ? (() => {
           const windName = { calm: "无风", tailwind: "顺风", headwind: "逆风" };
           const announcedWind = isJudge ? room.windDirection : room.announcedWindDirection;
@@ -2415,6 +2486,47 @@
       return;
     }
 
+    if (action === "controller-transfer-start" && room) {
+      try {
+        const data = await remotePost("controller-transfer-start");
+        window.alert(`请将转让码交给新控制设备：${data.controllerTransferCode}`);
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "controller-transfer-claim" && room) {
+      const input = app.querySelector("#controllerTransferCodeInput");
+      const controllerTransferCode = input ? input.value.trim() : "";
+      if (!/^\d{6}$/.test(controllerTransferCode)) {
+        window.alert("请输入 6 位转让码");
+        return;
+      }
+      try {
+        const data = await remotePost("controller-transfer-claim", { controllerTransferCode });
+        state.judgeTokens[room.id] = data && data.judgeToken ? data.judgeToken : currentJudgeToken();
+        state.remoteRoom = data.room;
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "system-timeout-skip" && room) {
+      if (!window.confirm("确认强制跳过当前夜间步骤？狼人将空刀，神职将不发动技能。")) return;
+      try {
+        await remotePost("system-timeout-skip");
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
     if (action === "refresh-room") {
       try {
         await refreshRemoteRoom();
@@ -2524,6 +2636,7 @@
         room.captainDiedLastDay = false;
         room.systemAnnouncementNotBefore = 0;
         room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
+        if (room.treasureMaskedFinalNight?.status === "PENDING") room.treasureMaskedFinalNight.status = "ACTIVE";
         room.currentNightStepIndex = 0;
         room.nightActions = room.nightActions || [];
         writeLog(room, "NIGHT_STARTED", { night: room.night });
@@ -2780,6 +2893,11 @@
         }
         room.phase = "DAY";
         room.pendingNightResolution = window.NightResolution.calculateNightResolution(room, room.night);
+        if (room.treasureMaskedFinalNight?.status === "ACTIVE") {
+          room.treasureMaskedFinalNight.status = "RESOLVED";
+          room.treasureMaskedFinalNight.resolvedAt = Date.now();
+          writeLog(room, "TREASURE_MASK_FINAL_NIGHT_RESOLVED", room.treasureMaskedFinalNight);
+        }
         writeLog(room, "NIGHT_FINISHED", { night: room.night });
         const locSug = calculateSuggestedDeaths(room, room.night);
         state.deathDraftSeats = locSug.map((item) => item.seat);
@@ -3146,7 +3264,12 @@
             if (assignment.roleId === "idiot") assignment.revealed = true;
           }
           trackCaptainDeath(room, seat);
-          queueDeathSkills(room, [seat], "EXILE");
+          if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
+            room.treasureMaskedFinalNight = { seat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
+            writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
+          } else {
+            queueDeathSkills(room, [seat], "EXILE");
+          }
         }
         const record = { day: room.night, seat, noExile, createdAt: Date.now() };
         room.exileRecords = room.exileRecords || [];

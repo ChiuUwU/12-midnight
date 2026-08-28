@@ -12,6 +12,8 @@ const HOST = process.env.HOST || "0.0.0.0";
 const WEB_ROOT = path.join(__dirname, "web");
 const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
 const SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS = Math.max(0, Number(process.env.SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS || 10000));
+const SYSTEM_STEP_TIMEOUT_OPTIONS = new Set([0, 60, 90, 120]);
+const CONTROLLER_TRANSFER_CODE_TTL_MS = 5 * 60 * 1000;
 const JUDGE_CLAIM_MAX_FAILURES = 5;
 const JUDGE_CLAIM_LOCK_MS = 5 * 60 * 1000;
 const rooms = new Map();
@@ -41,6 +43,7 @@ function createJudgeCode() {
 
 function writeLog(room, type, payload) {
   room.updatedAt = Date.now();
+  room.revision = Number(room.revision || 0) + 1;
   room.logs.push({
     id: `${Date.now()}-${room.logs.length}`,
     type,
@@ -153,6 +156,22 @@ function currentTreasureCard(room, night = room && room.night) {
   return (room && room.nightActions || []).find((item) => item.night === night && item.stepId === "treasure_pick" && !item.skipped)?.cardRoleId || "";
 }
 
+function normalizeSystemStepTimeout(value) {
+  const seconds = Number(value);
+  return SYSTEM_STEP_TIMEOUT_OPTIONS.has(seconds) ? seconds : 0;
+}
+
+function createControllerTransferCode() {
+  return String(crypto.randomInt(0, 1000000)).padStart(6, "0");
+}
+
+function shouldStartTreasureMaskedFinalNight(room, assignment) {
+  return room.boardId === "treasure_master"
+    && assignment?.roleId === "treasure_master"
+    && currentTreasureCard(room, room.night) === "masked_man"
+    && !(room.assignments || []).some((item) => item.alive !== false && ["wolf", "wolf_king"].includes(item.roleId));
+}
+
 function mechanicalSkillStep(room, night) {
   const roleId = previousMechanicalRole(room, night);
   const configs = {
@@ -191,6 +210,12 @@ function getFollowNeighborPuppetSeats(room) {
 function createNightSteps(boardId, night, room = null) {
   const firstNight = night === 1;
   const common = [];
+  if (room?.treasureMaskedFinalNight?.status === "PENDING") {
+    const dreamerAlive = (room.assignments || []).some((item) => item.roleId === "dreamer" && item.alive !== false);
+    if (dreamerAlive) common.push({ id: "dreamer_dream", actor: "dreamer", label: "摄梦人选择摄梦目标", targetCount: 1, allowSkip: false });
+    common.push({ id: "treasure_mask_final_kill", actor: "treasure_mask_final", label: "盗宝蒙面狼进行濒死最终刀", targetCount: 1, allowSkip: false });
+    return common;
+  }
   if (boardId === "follow_neighbor") {
     const witchStep = createWitchStep(room);
     common.push({ id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true });
@@ -387,7 +412,20 @@ function isSystemAnnouncementReady(room) {
 function scheduleSystemAnnouncement(room) {
   if (room.mode !== "SYSTEM") return;
   const hasNextStep = (room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length;
-  room.systemAnnouncementNotBefore = hasNextStep ? Date.now() + SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS : 0;
+  const announcementNotBefore = hasNextStep ? Date.now() + SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS : 0;
+  room.systemAnnouncementNotBefore = announcementNotBefore;
+  const timeoutSeconds = normalizeSystemStepTimeout(room.systemStepTimeoutSeconds);
+  room.systemStepDeadlineAt = hasNextStep && timeoutSeconds
+    ? announcementNotBefore + timeoutSeconds * 1000
+    : 0;
+}
+
+function startSystemStep(room) {
+  if (room.mode !== "SYSTEM") return;
+  const hasNextStep = (room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length;
+  room.systemAnnouncementNotBefore = 0;
+  const timeoutSeconds = normalizeSystemStepTimeout(room.systemStepTimeoutSeconds);
+  room.systemStepDeadlineAt = hasNextStep && timeoutSeconds ? Date.now() + timeoutSeconds * 1000 : 0;
 }
 
 function getWolfTeamRoleIds(boardId) {
@@ -399,7 +437,11 @@ function getWolfTeamRoleIds(boardId) {
 }
 
 function canAssignmentAct(room, step, assignment) {
-  if (!step || !assignment || assignment.alive === false) return false;
+  if (!step || !assignment) return false;
+  if (step.id === "treasure_mask_final_kill") {
+    return assignment.roleId === "treasure_master" && Number(assignment.seat) === Number(room.treasureMaskedFinalNight?.seat);
+  }
+  if (assignment.alive === false) return false;
   if (step.actor === "wolf_team") return getWolfTeamRoleIds(room.boardId).includes(assignment.roleId);
   return step.actor === assignment.roleId;
 }
@@ -431,7 +473,12 @@ function getSystemNightAccess(room, clientId, controller) {
     complete: !step,
     stepId: controller || canAct ? step?.id || "" : "",
     announcement: controller && !announcementReady ? "正在等待下一流程播报" : controller || canAct ? step?.label || "夜间行动已完成" : "夜间流程进行中",
-    privateContext
+    privateContext,
+    timeout: controller && step ? {
+      seconds: normalizeSystemStepTimeout(room.systemStepTimeoutSeconds),
+      deadlineAt: Number(room.systemStepDeadlineAt || 0),
+      expired: Boolean(room.systemStepDeadlineAt && Date.now() >= Number(room.systemStepDeadlineAt))
+    } : null
   };
 }
 
@@ -492,11 +539,15 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     phase: room.phase,
     day: room.day,
     night: room.night,
+    revision: Number(room.revision || 0),
     seats,
     aliveSeats: (room.assignments || []).filter((assignment) => assignment.alive !== false).map((assignment) => assignment.seat),
     logs: judge || revealAll ? room.logs : [],
     isJudge: judge,
     isController: controller,
+    systemStepTimeoutSeconds: controller && room.mode === "SYSTEM" ? normalizeSystemStepTimeout(room.systemStepTimeoutSeconds) : 0,
+    controllerTransferCode: controller && room.mode === "SYSTEM" ? room.controllerTransferCode || "" : "",
+    controllerTransferExpiresAt: controller && room.mode === "SYSTEM" ? Number(room.controllerTransferExpiresAt || 0) : 0,
     systemNight,
     systemDaybreakReady: room.mode === "SYSTEM" && controller && Boolean(room.pendingNightResolution),
     systemDayOutcomeRecorded: room.mode === "SYSTEM" && room.systemDayOutcomeRecordedDay === room.night,
@@ -506,6 +557,9 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     } : null,
     myDelayedDeath: room.mode === "SYSTEM" ? myDelayedDeath : null,
     myDeathSkill: room.mode === "SYSTEM" ? myDeathSkill : null,
+    myTreasureMaskedFinalNight: room.mode === "SYSTEM" && myAssignment && Number(room.treasureMaskedFinalNight?.seat) === Number(myAssignment.seat)
+      && ["PENDING", "ACTIVE"].includes(room.treasureMaskedFinalNight?.status)
+      ? { status: room.treasureMaskedFinalNight.status } : null,
     latestPublicAnnouncement: (room.publicAnnouncements || []).at(-1) || null,
     gameOutcome: room.phase === "GAME_OVER" ? room.gameOutcome || null : null,
     mySeat: mySeat ? { seat: mySeat.seat, nickname: mySeat.nickname, occupied: true } : null,
@@ -576,6 +630,7 @@ function queueDeathSkills(room, seats, phase, reasonsBySeat = {}) {
 
 function maybeCompleteSystemGame(room) {
   if (room.mode !== "SYSTEM" || room.phase === "GAME_OVER" || room.pendingNightResolution) return null;
+  if (["PENDING", "ACTIVE"].includes(room.treasureMaskedFinalNight?.status)) return null;
   if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return null;
   if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return null;
   const result = getGameOutcome(room);
@@ -596,8 +651,9 @@ function beginNight(room) {
   room.captainAliveAtDawn = (room.assignments || []).some((item) => item.roleId === "captain" && item.alive !== false);
   room.captainDiedLastDay = false;
   room.currentNightSteps = createNightSteps(room.boardId, room.night, room);
+  if (room.treasureMaskedFinalNight?.status === "PENDING") room.treasureMaskedFinalNight.status = "ACTIVE";
   room.currentNightStepIndex = 0;
-  room.systemAnnouncementNotBefore = 0;
+  startSystemStep(room);
   room.pendingNightResolution = null;
   writeLog(room, "NIGHT_STARTED", { night: room.night });
 }
@@ -678,7 +734,12 @@ function finalizeDayVote(room, record, source = "DAY_VOTE") {
       assignment.alive = false;
       if (assignment.roleId === "idiot") assignment.revealed = true;
     }
-    queueDeathSkills(room, [actualExiledSeat], "EXILE");
+    if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
+      room.treasureMaskedFinalNight = { seat: actualExiledSeat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
+      writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
+    } else {
+      queueDeathSkills(room, [actualExiledSeat], "EXILE");
+    }
   }
   const exileRecord = { day: room.night, seat: actualExiledSeat, rawSeat: rawExiledSeat, noExile: record.noExile, source, createdAt: Date.now() };
   room.exileRecords.push(exileRecord);
@@ -761,6 +822,7 @@ async function handleApi(request, response, url) {
       day: 0,
       night: 0,
       judgeClientId: body.clientId,
+      controllerClientId: body.clientId,
       balanceProfileId: body.balanceProfileId || body.clientId,
       judgeToken: crypto.randomBytes(18).toString("hex"),
       judgeCode: createJudgeCode(),
@@ -796,6 +858,11 @@ async function handleApi(request, response, url) {
       captainDiedLastDay: false,
       captainAliveAtDawn: true,
       systemAnnouncementNotBefore: 0,
+      systemStepTimeoutSeconds: body.mode === "SYSTEM" ? normalizeSystemStepTimeout(body.systemStepTimeoutSeconds) : 0,
+      systemStepDeadlineAt: 0,
+      controllerTransferCode: "",
+      controllerTransferExpiresAt: 0,
+      revision: 0,
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
@@ -831,6 +898,41 @@ async function handleApi(request, response, url) {
   if (target.action === "join") {
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
+    });
+  }
+
+  if (body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
+    return sendError(response, 409, "房间状态已更新，请刷新后重试");
+  }
+
+  if (target.action === "controller-transfer-start") {
+    if (room.mode !== "SYSTEM" || !isController(room, judgeToken)) return sendError(response, 403, "只有当前控制设备可以发起转让");
+    room.controllerTransferCode = createControllerTransferCode();
+    room.controllerTransferExpiresAt = Date.now() + CONTROLLER_TRANSFER_CODE_TTL_MS;
+    writeLog(room, "CONTROLLER_TRANSFER_CODE_CREATED", { expiresAt: room.controllerTransferExpiresAt });
+    return sendJson(response, 200, {
+      room: sanitizeRoom(room, { clientId, judgeToken }),
+      controllerTransferCode: room.controllerTransferCode,
+      controllerTransferExpiresAt: room.controllerTransferExpiresAt
+    });
+  }
+
+  if (target.action === "controller-transfer-claim") {
+    if (room.mode !== "SYSTEM") return sendError(response, 400, "只有无法官房间可以转让控制权");
+    if (!clientId) return sendError(response, 400, "缺少设备标识");
+    if (!room.controllerTransferCode || Date.now() > Number(room.controllerTransferExpiresAt || 0)) return sendError(response, 400, "转让码已过期，请由当前控制设备重新生成");
+    if (String(body.controllerTransferCode || "") !== room.controllerTransferCode) return sendError(response, 403, "转让码错误");
+    if ((room.seats || []).some((seat) => seat.clientId === clientId)) return sendError(response, 400, "已入座的玩家设备不能接管公共控制权");
+    const transferPhase = room.phase;
+    room.judgeToken = crypto.randomBytes(18).toString("hex");
+    room.controllerClientId = clientId;
+    room.controllerTransferCode = "";
+    room.controllerTransferExpiresAt = 0;
+    writeLog(room, "CONTROLLER_TRANSFERRED", { phase: transferPhase, beforeDeal: transferPhase === "WAITING" });
+    return sendJson(response, 200, {
+      room: sanitizeRoom(room, { clientId, judgeToken: room.judgeToken }),
+      judgeToken: room.judgeToken,
+      transferPhase
     });
   }
 
@@ -1187,7 +1289,12 @@ async function handleApi(request, response, url) {
         assignment.alive = false;
         if (assignment.roleId === "idiot") assignment.revealed = true;
       }
-      queueDeathSkills(room, [seat], "EXILE");
+      if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
+        room.treasureMaskedFinalNight = { seat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
+        writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
+      } else {
+        queueDeathSkills(room, [seat], "EXILE");
+      }
     }
     const record = {
       day: room.night,
@@ -1248,6 +1355,29 @@ async function handleApi(request, response, url) {
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
+  }
+
+  if (target.action === "system-timeout-skip") {
+    if (room.mode !== "SYSTEM" || !isController(room, judgeToken)) return sendError(response, 403, "只有公共控制设备可以处理超时");
+    if (room.phase !== "NIGHT") return sendError(response, 400, "当前不在夜晚阶段");
+    const step = room.currentNightSteps[room.currentNightStepIndex];
+    if (!step) return sendError(response, 400, "夜间流程已完成");
+    if (!room.systemStepDeadlineAt || Date.now() < Number(room.systemStepDeadlineAt)) return sendError(response, 400, "当前步骤尚未超时");
+    const actionRecord = {
+      night: room.night,
+      stepId: step.id,
+      label: step.label,
+      targetSeats: [],
+      skipped: true,
+      cardRoleId: "",
+      timeout: true,
+      createdAt: Date.now()
+    };
+    room.nightActions.push(actionRecord);
+    writeLog(room, "SYSTEM_STEP_TIMEOUT_SKIPPED", { stepId: step.id, night: room.night });
+    room.currentNightStepIndex += 1;
+    scheduleSystemAnnouncement(room);
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
 
   if (target.action === "night-action") {
@@ -1389,7 +1519,7 @@ async function handleApi(request, response, url) {
     if (removed.stepId === "captain_board") room.boardedSeat = 0;
     refreshSwapConflict(room, room.night);
     room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
-    room.systemAnnouncementNotBefore = 0;
+    startSystemStep(room);
     writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
@@ -1402,6 +1532,11 @@ async function handleApi(request, response, url) {
     if ((room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length) return sendError(response, 400, "仍有夜间身份尚未行动");
     room.phase = "DAY";
     room.pendingNightResolution = calculateNightResolution(room, room.night);
+    if (room.treasureMaskedFinalNight?.status === "ACTIVE") {
+      room.treasureMaskedFinalNight.status = "RESOLVED";
+      room.treasureMaskedFinalNight.resolvedAt = Date.now();
+      writeLog(room, "TREASURE_MASK_FINAL_NIGHT_RESOLVED", room.treasureMaskedFinalNight);
+    }
     writeLog(room, "NIGHT_FINISHED", { night: room.night });
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })

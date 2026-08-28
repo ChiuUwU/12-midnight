@@ -240,8 +240,8 @@ const boardTreasureMaster = {
   specialRules: {
     treasureMaster: {
       fixedCards: ["wolf", "villager"],
-      godCardPoolExcludes: ["masked_man"],
-      allowMaskedManInTreasureCards: false,
+      godCardPoolExcludes: [],
+      allowMaskedManInTreasureCards: true,
       firstNightWolfKillDisabled: true,
     },
   },
@@ -252,7 +252,7 @@ const boardTreasureMaster = {
 
 1. 固定生成盗宝大师玩家牌。
 2. 从 `deckPool` 中移除盗宝牌：狼人、平民、1 张神职牌。
-3. 当前神职牌池排除蒙面人。
+3. 神职牌池包含蒙面人。
 4. 将盗宝大师玩家牌与 `deckPool` 剩余 11 张牌组成 12 张场上玩家牌。
 5. 随机分配给 12 个座位。
 6. 将被移除的 3 张牌写入盗宝大师的 `treasureCards`。
@@ -343,7 +343,7 @@ interface PendingExileResult {
 
 1. 先固定生成 1 张盗宝大师玩家牌。
 2. 从基础身份池中选出 3 张盗宝牌：狼人、平民、1 张神职牌。
-3. 当前神职牌池排除蒙面人。
+3. 神职牌池包含蒙面人。
 4. 从基础身份池中移除这 3 张盗宝牌。
 5. 将盗宝大师玩家牌与基础身份池剩余 11 张牌组成 12 张场上玩家牌。
 6. 随机分配场上身份。
@@ -399,6 +399,14 @@ interface PendingExileResult {
 - 最近四局盗宝神牌每出现一次：`+3`。
 - 最近四局已经出现三次：额外 `+8`。
 - 其他当前版型没有额外随机牌堆，此项为 `0`。
+
+盗宝大师座位适配罚分（仅在盗宝大师版型启用）：
+
+- `T` 为盗宝大师座位的隐藏能力值；`M` 为本局 12 名玩家能力值的中位数；`W` 为除盗宝大师外 3 名狼人阵营玩家的平均能力值；`S` 为本局能力跨度（最高值减最低值）。
+- 若 `T < M`，增加 `0.45 × (M - T)` 的软罚分。
+- 允许盗宝大师略低于其余狼人：`W - T ≤ 8% × S` 时不增加该项罚分。
+- 当 `W - T > 8% × S` 时，增加 `1.5 × (W - T - 8% × S)`；当 `W - T > 16% × S` 时，再额外增加 `4 × (W - T - 16% × S)`。
+- 这不是硬性淘汰条件。算法仍可在整体阵营强度、身份重复规避和座位组合约束发生冲突时选中此类候选，但会明显偏好盗宝大师不弱于全场中位数、且不显著弱于另外 3 名狼人阵营玩家的发牌结果。
 
 历史按法官设备的隐藏 `balanceProfileId` 保存。Cloudflare 只保留最近 10 局；玩家端不得获得历史、实力曲线、目标优势或候选罚分。
 
