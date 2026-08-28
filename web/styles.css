@@ -42,47 +42,29 @@ select {
 }
 
 .home-season-shell {
-  position: relative;
-  isolation: isolate;
-  overflow: hidden;
-  padding: 8px;
-  border: 1px solid rgba(231, 215, 189, 0.22);
-  border-radius: 22px;
-  background-color: #111214;
-  background-image:
-    linear-gradient(180deg, rgba(8, 9, 11, 0.18), rgba(8, 9, 11, 0.55)),
-    url("./assets/s2-return-to-basics-hero.png");
-  background-position: center, center 52%;
-  background-repeat: no-repeat;
-  background-size: cover;
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
-}
-
-.home-season-shell::before {
-  content: "";
-  position: absolute;
-  z-index: 0;
-  inset: 0;
-  pointer-events: none;
-  background: linear-gradient(180deg, rgba(7, 8, 10, 0.06), rgba(247, 241, 231, 0.16) 36%, rgba(247, 241, 231, 0.34));
-}
-
-.home-season-shell > * {
-  position: relative;
-  z-index: 1;
+  display: contents;
 }
 
 .home-hero {
   position: relative;
   display: grid;
   grid-template-columns: 116px 1fr;
-  align-items: center;
+  align-items: start;
   gap: 18px;
-  min-height: 230px;
+  min-height: 430px;
   overflow: hidden;
-  padding: 24px 20px 30px;
-  border-radius: 14px;
-  background: linear-gradient(90deg, rgba(8, 9, 11, 0.58), rgba(8, 9, 11, 0.1) 58%, rgba(8, 9, 11, 0.62));
+  padding: 34px 20px 30px;
+  border: 1px solid rgba(231, 215, 189, 0.2);
+  border-radius: 18px;
+  background-color: #101114;
+  background-image:
+    linear-gradient(180deg, rgba(8, 9, 11, 0.88), rgba(8, 9, 11, 0.5) 42%, rgba(8, 9, 11, 0.02) 68%),
+    linear-gradient(90deg, rgba(8, 9, 11, 0.44), rgba(8, 9, 11, 0.02) 66%, rgba(8, 9, 11, 0.38)),
+    url("./assets/s2-return-to-basics-hero.png");
+  background-position: center, center, center 78%;
+  background-repeat: no-repeat;
+  background-size: cover;
+  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
   color: #fff;
 }
 
@@ -248,17 +230,6 @@ select {
   margin-top: 2px;
 }
 
-.home-season-shell .action-card {
-  border-color: rgba(231, 215, 189, 0.28);
-  background: rgba(255, 250, 242, 0.78);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 12px 28px rgba(15, 11, 8, 0.22);
-}
-
-.home-season-shell .primary-action {
-  background: linear-gradient(145deg, rgba(21, 21, 21, 0.88), rgba(44, 33, 27, 0.86));
-}
-
 .action-card {
   min-height: 96px;
   border: 1px solid var(--line);
@@ -327,14 +298,6 @@ select {
 
 .board-panel {
   margin-top: 16px;
-}
-
-.home-season-shell .board-panel,
-.home-season-shell .resume-panel {
-  border-color: rgba(231, 215, 189, 0.48);
-  background: rgba(255, 250, 242, 0.82);
-  backdrop-filter: blur(10px);
-  box-shadow: 0 12px 28px rgba(15, 11, 8, 0.16);
 }
 
 .board-item {
@@ -839,8 +802,8 @@ select {
   .home-hero {
     grid-template-columns: 92px 1fr;
     gap: 14px;
-    min-height: 202px;
-    padding: 18px 16px 24px;
+    min-height: 370px;
+    padding: 26px 16px 24px;
   }
 
   .hero-art {
@@ -940,8 +903,8 @@ select {
   .home-hero {
     grid-template-columns: 78px 1fr;
     gap: 12px;
-    min-height: 176px;
-    padding: 14px 12px 20px;
+    min-height: 326px;
+    padding: 20px 12px 20px;
   }
 
   .hero-art {
