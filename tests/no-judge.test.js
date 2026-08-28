@@ -395,6 +395,77 @@ test("a system-mode wolf can self-destruct and immediately end the day", async (
   assert.equal(observer.aliveSeats.includes(wolf.room.assignments[0].seat), false);
 });
 
+test("system controller transfer rotates authority and only permits the old controller to take a seat before dealing", async () => {
+  const controllerId = `transfer-old-${Date.now()}`;
+  const created = await post("/api/rooms", {
+    clientId: controllerId,
+    mode: "SYSTEM",
+    boardId: "pre_witch_hunter_idiot_mixed"
+  });
+  assert.equal(created.status, 200);
+  const id = created.body.room.id;
+  const oldAuth = { clientId: controllerId, judgeToken: created.body.judgeToken };
+  const started = await post(`/api/rooms/${id}/controller-transfer-start`, oldAuth);
+  assert.equal(started.status, 200);
+  assert.match(started.body.controllerTransferCode, /^\d{6}$/);
+  const newControllerId = `transfer-new-${Date.now()}`;
+  const claimed = await post(`/api/rooms/${id}/controller-transfer-claim`, {
+    clientId: newControllerId,
+    controllerTransferCode: started.body.controllerTransferCode
+  });
+  assert.equal(claimed.status, 200);
+  assert.equal(claimed.body.room.isController, true);
+  assert.notEqual(claimed.body.judgeToken, oldAuth.judgeToken);
+  assert.equal((await getRoom(id, controllerId, oldAuth.judgeToken)).isController, false);
+  assert.equal((await post(`/api/rooms/${id}/seat`, { ...oldAuth, seat: 1 })).status, 200);
+
+  const afterDeal = await createSystemRoom("transfer-after-deal");
+  const transfer = await post(`/api/rooms/${afterDeal.id}/controller-transfer-start`, afterDeal.controllerAuth);
+  const secondControllerId = `transfer-after-${Date.now()}`;
+  const secondClaim = await post(`/api/rooms/${afterDeal.id}/controller-transfer-claim`, {
+    clientId: secondControllerId,
+    controllerTransferCode: transfer.body.controllerTransferCode
+  });
+  assert.equal(secondClaim.status, 200);
+  assert.equal((await post(`/api/rooms/${afterDeal.id}/seat`, { ...afterDeal.controllerAuth, seat: 1 })).status, 400);
+});
+
+test("stale remote mutations are rejected before they can overwrite the first valid write", async () => {
+  const created = await post("/api/rooms", {
+    clientId: `revision-controller-${Date.now()}`,
+    mode: "SYSTEM",
+    boardId: "pre_witch_hunter_idiot_mixed"
+  });
+  const id = created.body.room.id;
+  const revision = created.body.room.revision;
+  const first = await post(`/api/rooms/${id}/seat`, { clientId: `revision-a-${Date.now()}`, seat: 1, expectedRevision: revision });
+  const second = await post(`/api/rooms/${id}/seat`, { clientId: `revision-b-${Date.now()}`, seat: 2, expectedRevision: revision });
+  assert.equal(first.status, 200);
+  assert.equal(second.status, 409);
+  const observer = await getRoom(id, "revision-observer");
+  assert.equal(observer.seats.find((seat) => seat.seat === 1).occupied, true);
+  assert.equal(observer.seats.find((seat) => seat.seat === 2).occupied, false);
+});
+
+test("system timeout is optional, starts with the actionable step, and cannot be skipped early", async () => {
+  const controllerId = `timeout-controller-${Date.now()}`;
+  const created = await post("/api/rooms", {
+    clientId: controllerId,
+    mode: "SYSTEM",
+    boardId: "pre_witch_hunter_idiot_mixed",
+    systemStepTimeoutSeconds: 60
+  });
+  const id = created.body.room.id;
+  const controllerAuth = { clientId: controllerId, judgeToken: created.body.judgeToken };
+  for (let seat = 1; seat <= 12; seat += 1) assert.equal((await post(`/api/rooms/${id}/seat`, { clientId: `timeout-player-${Date.now()}-${seat}`, seat })).status, 200);
+  assert.equal((await post(`/api/rooms/${id}/deal`, controllerAuth)).status, 200);
+  const started = await post(`/api/rooms/${id}/night-start`, controllerAuth);
+  assert.equal(started.status, 200);
+  assert.equal(started.body.room.systemNight.timeout.seconds, 60);
+  assert.ok(started.body.room.systemNight.timeout.deadlineAt > Date.now());
+  assert.equal((await post(`/api/rooms/${id}/system-timeout-skip`, controllerAuth)).status, 400);
+});
+
 test("all complex boards can complete two system-guided nights", async () => {
   const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage", "follow_neighbor"];
   const expectedSecondNightSteps = {

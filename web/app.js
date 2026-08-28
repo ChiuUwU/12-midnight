@@ -648,7 +648,9 @@
     });
     const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error || "请求失败");
+      const error = new Error(data.error || "请求失败");
+      error.status = response.status;
+      throw error;
     }
     return data;
   }
@@ -678,17 +680,26 @@
   }
 
   async function remotePost(action, payload = {}) {
-    const data = await apiRequest(`/api/rooms/${state.currentRoomId}/${action}`, {
-      method: "POST",
-      body: JSON.stringify({
-        clientId: state.currentUserId,
-        judgeToken: currentJudgeToken(),
-        ...payload
-      })
-    });
-    state.remoteRoom = data.room;
-    saveState();
-    return data;
+    try {
+      const data = await apiRequest(`/api/rooms/${state.currentRoomId}/${action}`, {
+        method: "POST",
+        body: JSON.stringify({
+          clientId: state.currentUserId,
+          judgeToken: currentJudgeToken(),
+          expectedRevision: state.remoteRoom?.revision,
+          ...payload
+        })
+      });
+      state.remoteRoom = data.room;
+      saveState();
+      return data;
+    } catch (error) {
+      if (error.status === 409) {
+        await refreshRemoteRoom().catch(() => {});
+        render();
+      }
+      throw error;
+    }
   }
 
   function getBoard(boardId) {
@@ -1506,6 +1517,16 @@
             ${BOARDS.map((board) => `<option value="${board.id}">${board.name}</option>`).join("")}
           </select>
         </label>
+        <label class="field hidden" id="systemTimeoutField">
+          <span class="label">夜间行动超时</span>
+          <select class="select" id="systemStepTimeout">
+            <option value="0">关闭</option>
+            <option value="60">60 秒</option>
+            <option value="90">90 秒</option>
+            <option value="120">120 秒</option>
+          </select>
+          <span class="notice">超时后仅由控制设备决定继续等待、重播或强制跳过。</span>
+        </label>
         <div class="body-text" id="boardTagline">${BOARDS[0].tagline || ""}</div>
       </section>
       <button class="button primary" data-action="create-room">创建</button>
@@ -1519,6 +1540,7 @@
       selectedMode = button.dataset.mode;
       app.querySelectorAll(".segment").forEach((item) => item.classList.remove("active"));
       button.classList.add("active");
+      app.querySelector("#systemTimeoutField").classList.toggle("hidden", selectedMode !== "SYSTEM");
     });
 
     app.querySelector("#boardSelect").addEventListener("change", (event) => {
@@ -1538,7 +1560,8 @@
               clientId: state.currentUserId,
               balanceProfileId: state.balanceProfileId,
               mode: selectedMode,
-              boardId: app.querySelector("#boardSelect").value
+              boardId: app.querySelector("#boardSelect").value,
+              systemStepTimeoutSeconds: Number(app.querySelector("#systemStepTimeout").value || 0)
             })
           });
           state.currentRoomId = data.room.id;
@@ -1670,6 +1693,15 @@
     const canSelfDestruct = IS_REMOTE && room.mode === "SYSTEM" && !canControl && room.phase === "DAY"
       && myAssignment?.alive !== false && myAssignment?.roleId !== "mixed_blood"
       && (myAssignment?.currentCamp || myAssignment?.camp) === "WOLF";
+    const systemTimeout = room.systemNight?.timeout || null;
+    const systemTimeoutRemaining = systemTimeout?.deadlineAt
+      ? Math.max(0, Math.ceil((systemTimeout.deadlineAt - Date.now()) / 1000))
+      : 0;
+    const controllerTransferActive = Boolean(
+      room.controllerTransferCode
+      && room.controllerTransferExpiresAt
+      && room.controllerTransferExpiresAt > Date.now(),
+    );
     const treasureMaskedFinalNightNotice = room.myTreasureMaskedFinalNight
       ? '<section class="panel danger-panel"><div class="label">濒死最终夜</div><div class="body-text">你将在本夜完成一次最终刀；你已不属于存活玩家，无法被摄梦人选择。</div></section>'
       : "";
@@ -1694,6 +1726,7 @@
       canEnterJudgeNextNight ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.mode === "SYSTEM" && isController && room.phase === "DAY" && room.systemDayOutcomeRecorded && !room.systemDaybreakReady && !(room.systemPendingTasks?.delayedDeaths || room.systemPendingTasks?.deathSkills) ? '<button class="button primary" data-action="start-night">进入下一夜</button>' : "",
       room.phase === "NIGHT" && (canControl || room.systemNight?.canAct) ? `<button class="button ${room.systemNight?.canAct ? "primary" : ""}" data-action="view" data-view="night">${room.systemNight?.canAct ? "轮到我行动" : "进入夜间播报"}</button>` : "",
+      room.mode === "SYSTEM" && isController && systemTimeout?.expired ? '<button class="button danger" data-action="system-timeout-skip">超时：强制跳过当前步骤</button>' : "",
       room.phase === "WAITING" && canControl ? '<button class="button" data-action="fill-test-seats">补齐测试座位</button>' : ""
     ];
     const infoActions = [
@@ -1733,6 +1766,21 @@
           <button class="button" data-action="claim-judge">进入法官席</button>
         </section>
       ` : ""}
+      ${IS_REMOTE && room.mode === "SYSTEM" && isController ? `
+        <section class="panel">
+          <div class="label">转让公共控制权</div>
+          <div class="body-text">发牌前转让后，你可以选择空座位；发牌后转让仅更换控制设备。</div>
+          ${controllerTransferActive ? `<div class="value">${room.controllerTransferCode}</div><div class="notice">转让码有效至 ${new Date(room.controllerTransferExpiresAt).toLocaleTimeString()}，使用一次即失效。</div>` : room.controllerTransferCode ? '<div class="notice">上一组转让码已过期，请重新生成。</div>' : ""}
+          <button class="button" data-action="controller-transfer-start">生成六位转让码</button>
+        </section>
+      ` : ""}
+      ${IS_REMOTE && room.mode === "SYSTEM" && !isController && !mySeat ? `
+        <section class="panel">
+          <div class="label">接管公共控制设备</div>
+          <input class="input" id="controllerTransferCodeInput" inputmode="numeric" maxlength="6" placeholder="输入 6 位转让码" />
+          <button class="button" data-action="controller-transfer-claim">接管控制权</button>
+        </section>
+      ` : ""}
       ${treasureMaskedFinalNightNotice}
       <section class="panel">
         <div class="row">
@@ -1740,6 +1788,7 @@
           <div><div class="label">人数</div><div class="value">${occupiedCount} / ${board.playerCount}</div></div>
         </div>
         <div class="notice">${canControl ? `当前阶段：${getPhaseName(room.phase)}${room.night ? ` · 第 ${room.night} 天` : ""}` : `我的状态：${getPlayerStatusText({ room, mySeat, sheriffCandidates, sheriffWithdrawn })}`}</div>
+        ${room.mode === "SYSTEM" && isController && systemTimeout?.seconds ? `<div class="notice">行动超时：${systemTimeout.expired ? "已超时" : `${systemTimeoutRemaining} 秒后提醒控制设备`}</div>` : ""}
         ${room.boardId === "dawn_voyage" && room.phase === "DAY" && (isJudge ? room.captainAliveAtDawn && room.windDirection : room.announcedWindDirection) ? (() => {
           const windName = { calm: "无风", tailwind: "顺风", headwind: "逆风" };
           const announcedWind = isJudge ? room.windDirection : room.announcedWindDirection;
@@ -2430,6 +2479,47 @@
         state.judgeTokens[room.id] = data && data.judgeToken ? data.judgeToken : currentJudgeToken();
         state.remoteRoom = data.room;
         saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "controller-transfer-start" && room) {
+      try {
+        const data = await remotePost("controller-transfer-start");
+        window.alert(`请将转让码交给新控制设备：${data.controllerTransferCode}`);
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "controller-transfer-claim" && room) {
+      const input = app.querySelector("#controllerTransferCodeInput");
+      const controllerTransferCode = input ? input.value.trim() : "";
+      if (!/^\d{6}$/.test(controllerTransferCode)) {
+        window.alert("请输入 6 位转让码");
+        return;
+      }
+      try {
+        const data = await remotePost("controller-transfer-claim", { controllerTransferCode });
+        state.judgeTokens[room.id] = data && data.judgeToken ? data.judgeToken : currentJudgeToken();
+        state.remoteRoom = data.room;
+        saveState();
+        render();
+      } catch (error) {
+        window.alert(error.message);
+      }
+      return;
+    }
+
+    if (action === "system-timeout-skip" && room) {
+      if (!window.confirm("确认强制跳过当前夜间步骤？狼人将空刀，神职将不发动技能。")) return;
+      try {
+        await remotePost("system-timeout-skip");
         render();
       } catch (error) {
         window.alert(error.message);

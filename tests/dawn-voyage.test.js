@@ -106,7 +106,7 @@ test("remote first-night flows include each board's identity confirmation steps"
   const expectedConfirmations = {
     pre_witch_hunter_idiot_mixed: ["hunter_confirm", "idiot_confirm"],
     masquerade: ["dancer_confirm", "idiot_confirm"],
-    treasure_master: ["masked_man_confirm"],
+    treasure_master: [],
     mechanical_wolf_spirit_medium: ["hunter_confirm"],
     realm_of_trickery: ["order_prince_confirm"],
     dawn_voyage: ["captain_confirm", "idiot_confirm"]
@@ -125,6 +125,9 @@ test("remote first-night flows include each board's identity confirmation steps"
     expectedSteps.forEach((stepId) => assert.ok(stepIds.includes(stepId), `${boardId} missing ${stepId}`));
     if (boardId === "treasure_master" && started.body.room.assignments.some((assignment) => assignment.roleId === "hunter")) {
       assert.ok(stepIds.includes("hunter_confirm"), `${boardId} missing hunter_confirm`);
+    }
+    if (boardId === "treasure_master" && started.body.room.assignments.some((assignment) => assignment.roleId === "masked_man")) {
+      assert.ok(stepIds.includes("masked_man_confirm"), `${boardId} missing masked_man_confirm`);
     }
   }
 });
