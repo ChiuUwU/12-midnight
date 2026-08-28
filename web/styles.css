@@ -41,27 +41,23 @@ select {
   padding: 18px 2px 24px;
 }
 
-.home-season-shell {
-  display: contents;
-}
-
 .home-hero {
   position: relative;
   display: grid;
   grid-template-columns: 116px 1fr;
-  align-items: start;
+  align-items: center;
   gap: 18px;
-  min-height: 430px;
+  min-height: 230px;
   overflow: hidden;
-  padding: 34px 20px 30px;
+  padding: 24px 20px 30px;
   border: 1px solid rgba(231, 215, 189, 0.2);
   border-radius: 18px;
   background-color: #101114;
   background-image:
-    linear-gradient(180deg, rgba(8, 9, 11, 0.88), rgba(8, 9, 11, 0.5) 42%, rgba(8, 9, 11, 0.02) 68%),
-    linear-gradient(90deg, rgba(8, 9, 11, 0.44), rgba(8, 9, 11, 0.02) 66%, rgba(8, 9, 11, 0.38)),
+    linear-gradient(90deg, rgba(8, 9, 11, 0.62), rgba(8, 9, 11, 0.18) 58%, rgba(8, 9, 11, 0.72)),
+    linear-gradient(180deg, rgba(8, 9, 11, 0.1), rgba(8, 9, 11, 0.5)),
     url("./assets/s2-return-to-basics-hero.png");
-  background-position: center, center, center 78%;
+  background-position: center, center, center 66%;
   background-repeat: no-repeat;
   background-size: cover;
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.28);
@@ -802,8 +798,8 @@ select {
   .home-hero {
     grid-template-columns: 92px 1fr;
     gap: 14px;
-    min-height: 370px;
-    padding: 26px 16px 24px;
+    min-height: 202px;
+    padding: 18px 16px 24px;
   }
 
   .hero-art {
@@ -903,8 +899,8 @@ select {
   .home-hero {
     grid-template-columns: 78px 1fr;
     gap: 12px;
-    min-height: 326px;
-    padding: 20px 12px 20px;
+    min-height: 176px;
+    padding: 14px 12px 20px;
   }
 
   .hero-art {

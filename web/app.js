@@ -1448,7 +1448,6 @@
     const hasRoom = Boolean(getCurrentRoom());
     const room = getCurrentRoom();
     app.innerHTML = `
-      <div class="home-season-shell">
       <section class="home-hero">
         <div class="hero-art">
           <img class="app-icon" src="assets/app-icon.png" alt="最后一夜 Last-Night" />
@@ -1499,7 +1498,6 @@
           ${BOARDS.map((board) => `<div class="list-item board-item"><div><div class="board-name">${board.name}</div><div class="board-meta">${board.roleSummary || "12 人 · 屠边 · 可上警"}</div></div><span class="tag">可发牌</span></div>`).join("")}
         </div>
       </section>
-      </div>
     `;
   }
 
