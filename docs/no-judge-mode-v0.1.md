@@ -1,5 +1,7 @@
 # 无法官模式 v0.1
 
+> 发布状态（2026-08-29）：功能已合并至线上 `main`（`e5ce7f8`），自动化测试 36/36 通过；真实多设备验收因设备不足暂缓，恢复时按 [`system-mode-acceptance-checklist-v1.0.md`](./system-mode-acceptance-checklist-v1.0.md) 执行。
+
 ## 定位
 
 无法官模式仍然服务线下狼人杀，不把发言、上警、投票和唱票搬到线上。

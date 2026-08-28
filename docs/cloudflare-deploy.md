@@ -38,7 +38,7 @@ npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
 ## 发布与缓存规范
 
 1. 功能分支通过 PR 合并到 `main`；Cloudflare Pages 自动触发生产部署。
-2. 每次修改 `web/` 中会被浏览器长期复用的脚本、样式或页面资源时，同步更新 `web/index.html` 的资源版本参数，使用清晰的发布标识，例如 `20260810-release-hygiene`。
+2. 每次修改 `web/` 中会被浏览器长期复用的脚本、样式或页面资源时，同步更新 `web/index.html` 的资源版本参数，使用清晰的发布标识，例如 `20260829-system-resilience`。
 3. 部署后确认线上首页、`app.js` 和接口均返回预期内容；不能只以 GitHub 合并成功作为发布完成。
 4. 出现线上回归时，优先通过回滚 `main` 的对应提交恢复，不直接以本地未提交文件覆盖生产。
 
@@ -50,7 +50,7 @@ npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
 https://12-midnight.pages.dev
 ```
 
-创建房间后，把房间分享链接发给其他玩家。法官设备保留法官口令；如果换设备当法官，用口令进入法官席。
+创建房间后，把房间分享链接发给其他玩家。有法官房间可用法官口令接管法官席；无法官房间由当前公共控制设备生成一次性六位转让码，新设备输入该码后接管控制权。
 
 ## 当前线上版限制
 
