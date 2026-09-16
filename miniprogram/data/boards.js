@@ -133,7 +133,7 @@ const BOARDS = [
       { roleId: "wolf_king", count: 1, camp: "WOLF" },
       { roleId: "wolf", count: 3, camp: "WOLF" }
     ],
-    summary: "狼王在侧，守卫持盾。刀光与药火，谁守到最后？",
+    summary: "狼王临场，守卫执夜。席间风起，黑白交锋。",
     globalRules: DEFAULT_RULES
   },
   {

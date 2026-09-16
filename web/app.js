@@ -208,7 +208,7 @@
         { roleId: "wolf", count: 3, camp: "WOLF" }
       ],
       roleSummary: "预言家 · 女巫 · 守卫 · 猎人 · 平民×4 · 狼王 · 狼人×3",
-      tagline: "狼王在侧，守卫持盾。刀光与药火，谁守到最后？",
+      tagline: "狼王临场，守卫执夜。席间风起，黑白交锋。",
       globalRules: DEFAULT_RULES
     },
     {
