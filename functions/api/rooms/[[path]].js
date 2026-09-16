@@ -9,7 +9,7 @@ const DEFAULT_RULES = {
   sheriffEnabled: true,
   lastWordsEnabled: true,
   nightDeathLastWords: false,
-  witchCanSelfSaveFirstNight: false,
+  witchCanSelfSave: false,
   witchAntidoteCount: 1,
   witchPoisonCount: 1,
   guardCanRepeatTarget: false,
@@ -125,6 +125,21 @@ const BOARDS = [
       { roleId: "idiot", count: 1, camp: "GOOD" },
       { roleId: "villager", count: 4, camp: "GOOD" },
       { roleId: "siren", count: 1, camp: "WOLF" },
+      { roleId: "wolf", count: 3, camp: "WOLF" }
+    ],
+    globalRules: DEFAULT_RULES
+  },
+  {
+    id: "wolf_king_guard",
+    name: "狼王守卫",
+    playerCount: 12,
+    roles: [
+      { roleId: "seer", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "guard", count: 1, camp: "GOOD" },
+      { roleId: "hunter", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 4, camp: "GOOD" },
+      { roleId: "wolf_king", count: 1, camp: "WOLF" },
       { roleId: "wolf", count: 3, camp: "WOLF" }
     ],
     globalRules: DEFAULT_RULES
@@ -465,6 +480,15 @@ function createNightSteps(boardId, night, room = null) {
     steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) steps.push(witchStep);
     steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+  } else if (boardId === "wolf_king_guard") {
+    const witchStep = createWitchStep(room);
+    steps.push(
+      { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
+      { id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true }
+    );
+    if (witchStep) steps.push(witchStep);
+    steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    if (firstNight) steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
   } else if (boardId === "pre_witch_hunter_idiot_mixed") {
     if (firstNight) steps.push({ id: "mixed_blood_model", actor: "mixed_blood", label: "混血儿选择榜样", targetCount: 1, allowSkip: false });
     const witchStep = createWitchStep(room);
@@ -729,6 +753,7 @@ function getWolfTeamRoleIds(boardId) {
   if (boardId === "dawn_voyage") return ["wolf", "siren"];
   if (boardId === "treasure_master") return ["wolf", "wolf_king"];
   if (boardId === "follow_neighbor") return ["wolf", "wolf_king"];
+  if (boardId === "wolf_king_guard") return ["wolf", "wolf_king"];
   return ["wolf"];
 }
 
@@ -1360,7 +1385,7 @@ async function handleRoomAction(request, env, route) {
       const antidoteTargetSeat = antidoteUsed && wolfAction && wolfAction.targetSeats ? Number(wolfAction.targetSeats[0]) : 0;
       if (antidoteUsed && !antidoteTargetSeat) return error(400, "今晚无人被击杀，不能使用解药");
       const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
-      if (antidoteUsed && room.night === 1 && antidoteTargetSeat === witchSeat) return error(400, "女巫首夜不能自救");
+      if (antidoteUsed && antidoteTargetSeat === witchSeat) return error(400, "女巫不能自救");
       const requestedPoisonSeat = Number(body.poisonTargetSeat || 0);
       const poisonTargetSeat = step.poisonAvailable && requestedPoisonSeat >= 1 && requestedPoisonSeat <= 12 ? requestedPoisonSeat : 0;
       if (requestedPoisonSeat && !poisonTargetSeat) return error(400, "毒药目标不合法或毒药已经使用");
