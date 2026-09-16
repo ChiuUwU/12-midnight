@@ -251,7 +251,7 @@ test("system mode publicly reveals an exiled idiot as white god", async () => {
   assert.deepEqual(exiled.body.room.publicReveals, [{ seat: idiot.room.assignments[0].seat, roleId: "idiot" }]);
 });
 
-test("system witch rules reject first-night self-save and invalid potion reuse", async () => {
+test("system witch rules reject self-save on every night and invalid potion reuse", async () => {
   const selfSave = await createSystemRoom("witch-self-save");
   const witchView = selfSave.views.find((item) => item.room.assignments[0].roleId === "witch");
   assert.ok(witchView);
@@ -267,13 +267,45 @@ test("system witch rules reject first-night self-save and invalid potion reuse",
         poisonTargetSeat: 0
       });
       assert.equal(rejected.status, 400);
-      assert.match(rejected.body.error, /首夜不能自救/);
+      assert.match(rejected.body.error, /女巫不能自救/);
+      assert.equal((await post(`/api/rooms/${selfSave.id}/night-action`, {
+        clientId: actor.player.clientId,
+        antidoteUsed: false,
+        poisonTargetSeat: 0
+      })).status, 200);
       break;
     }
     const payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
     if (actor.step.id === "wolves_kill") payload.targetSeats = [witchSeat];
     else if (actor.step.targetCount > 0) payload.targetSeats = [selfSave.views.find((item) => item.player.clientId !== actor.player.clientId).room.assignments[0].seat];
     assert.equal((await post(`/api/rooms/${selfSave.id}/night-action`, payload)).status, 200);
+  }
+
+  const secondNightSelfSave = await createSystemRoom("witch-self-save-second-night");
+  const secondNightWitch = secondNightSelfSave.views.find((item) => item.room.assignments[0].roleId === "witch");
+  assert.ok(secondNightWitch);
+  const secondNightWitchSeat = secondNightWitch.room.assignments[0].seat;
+  await completeSafeSystemNight(secondNightSelfSave);
+  assert.equal((await post(`/api/rooms/${secondNightSelfSave.id}/exile-record`, { ...secondNightSelfSave.controllerAuth, noExile: true, seat: 0 })).status, 200);
+  assert.equal((await post(`/api/rooms/${secondNightSelfSave.id}/night-start`, secondNightSelfSave.controllerAuth)).status, 200);
+  while (true) {
+    const actor = await findSystemActor(secondNightSelfSave.id, secondNightSelfSave.players);
+    assert.ok(actor);
+    if (actor.step.id === "witch_action") {
+      const rejected = await post(`/api/rooms/${secondNightSelfSave.id}/night-action`, {
+        clientId: actor.player.clientId,
+        antidoteUsed: true,
+        poisonTargetSeat: 0
+      });
+      assert.equal(rejected.status, 400);
+      assert.match(rejected.body.error, /女巫不能自救/);
+      break;
+    }
+    const payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
+    if (actor.step.id === "wolves_kill") payload.targetSeats = [secondNightWitchSeat];
+    else if (actor.step.id === "guard_guard") payload.skipped = true;
+    else if (actor.step.targetCount > 0) payload.targetSeats = [secondNightSelfSave.views.find((item) => item.player.clientId !== actor.player.clientId).room.assignments[0].seat];
+    assert.equal((await post(`/api/rooms/${secondNightSelfSave.id}/night-action`, payload)).status, 200);
   }
 
   const potionReuse = await createSystemRoom("witch-potion-reuse");
@@ -467,13 +499,14 @@ test("system timeout is optional, starts with the actionable step, and cannot be
 });
 
 test("all complex boards can complete two system-guided nights", async () => {
-  const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage", "follow_neighbor"];
+  const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage", "wolf_king_guard", "follow_neighbor"];
   const expectedSecondNightSteps = {
     masquerade: ["dancer_dance", "mask_check", "mask_give"],
     treasure_master: ["treasure_pick", "treasure_skill", "wolves_kill"],
     mechanical_wolf_spirit_medium: ["mechanical_guard", "mechanical_mimic"],
     realm_of_trickery: ["magician_swap", "trickster_swap"],
     dawn_voyage: ["siren_wind", "captain_board"],
+    wolf_king_guard: [],
     follow_neighbor: []
   };
   for (const boardId of boardIds) {
@@ -508,6 +541,11 @@ test("all complex boards can complete two system-guided nights", async () => {
         assert.ok(actor, `${boardId}: no acting player for ${controllerRoom.systemNight.stepId}`);
         const step = actor.room.currentNightSteps[0];
         stepIds.push(step.id);
+        if (boardId === "wolf_king_guard" && step.id === "wolves_kill") {
+          const wolfKing = roleViews.find((item) => item.room.assignments[0].roleId === "wolf_king");
+          assert.ok(wolfKing);
+          assert.equal((await getRoom(id, wolfKing.player.clientId)).systemNight.canAct, true, "wolf king must be able to submit the shared kill");
+        }
         const candidates = (step.allowedSeats?.length ? step.allowedSeats : actor.room.aliveSeats).filter(Boolean);
         let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
         if (step.id === "wolves_kill") payload.skipped = true;

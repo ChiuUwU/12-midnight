@@ -11,7 +11,7 @@
 - 可见身份：玩家自己看到的身份展示。
 - 技能来源：原生技能、机械狼模仿、盗宝牌、临时标记。
 - 临时结算标记：例如假面的面具、摄梦、守护、中毒、负伤。
-- 死亡原因：狼刀、毒杀、放逐、同守同救、摄梦连续、舞池结算、蒙面延迟死亡等。
+- 死亡原因：狼刀、毒杀、放逐、同守同救（奶死）、摄梦连续、舞池结算、蒙面延迟死亡等。
 
 ## 2. 推荐枚举
 
@@ -80,7 +80,7 @@ interface GlobalRules {
   sheriffEnabled: boolean;
   lastWordsEnabled: boolean;
   nightDeathLastWords: boolean;
-  witchCanSelfSaveFirstNight: boolean;
+  witchCanSelfSave: boolean;
   witchAntidoteCount: number;
   witchPoisonCount: number;
   guardCanRepeatTarget: boolean;

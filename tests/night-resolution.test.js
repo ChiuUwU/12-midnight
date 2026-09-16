@@ -204,7 +204,7 @@ function resolutionRoom(boardId, actions, extra = {}) {
   };
 }
 
-test("calculator derives knife, poison and same-guard-save deaths", () => {
+test("calculator derives knife, poison and same-guard-save milk death", () => {
   const ordinary = resolutionRoom("pre_witch_hunter_idiot_mixed", [
     { night: 2, stepId: "wolves_kill", targetSeats: [3] },
     { night: 2, stepId: "witch_action", antidoteUsed: false, poisonTargetSeat: 5 }
@@ -220,6 +220,13 @@ test("calculator derives knife, poison and same-guard-save deaths", () => {
     { night: 2, stepId: "witch_action", antidoteUsed: true, antidoteTargetSeat: 3, poisonTargetSeat: 0 }
   ]);
   assert.deepEqual(calculateSuggestedDeaths(guardedAndSaved), [{ seat: 3, reasons: ["同守同救"] }]);
+  const hunter = getDeathSkillResolution({
+    ...guardedAndSaved,
+    assignments: guardedAndSaved.assignments.map((assignment) => assignment.seat === 3
+      ? { ...assignment, roleId: "hunter" }
+      : assignment)
+  }, { seat: 3, phase: "DAYBREAK", reasons: ["同守同救"] });
+  assert.equal(hunter.eligible, true, "同守同救（奶死）应按非毒杀死亡结算");
 });
 
 test("calculator applies Dawn Voyage wind and drowning", () => {

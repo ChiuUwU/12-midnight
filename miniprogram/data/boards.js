@@ -3,7 +3,7 @@ const DEFAULT_RULES = {
   sheriffEnabled: true,
   lastWordsEnabled: true,
   nightDeathLastWords: false,
-  witchCanSelfSaveFirstNight: false,
+  witchCanSelfSave: false,
   witchAntidoteCount: 1,
   witchPoisonCount: 1,
   guardCanRepeatTarget: false,
@@ -118,7 +118,23 @@ const BOARDS = [
       { roleId: "wolf", count: 3, camp: "WOLF" }
     ],
     summary: "海妖控风，船长掌船。十二人迷雾中航向黎明。",
-    globalRules: { ...DEFAULT_RULES, witchCanSelfSaveFirstNight: false }
+    globalRules: DEFAULT_RULES
+  },
+  {
+    id: "wolf_king_guard",
+    name: "狼王守卫",
+    playerCount: 12,
+    roles: [
+      { roleId: "seer", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "guard", count: 1, camp: "GOOD" },
+      { roleId: "hunter", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 4, camp: "GOOD" },
+      { roleId: "wolf_king", count: 1, camp: "WOLF" },
+      { roleId: "wolf", count: 3, camp: "WOLF" }
+    ],
+    summary: "狼王在侧，守卫持盾。刀光与药火，谁守到最后？",
+    globalRules: DEFAULT_RULES
   },
   {
     id: "follow_neighbor",
