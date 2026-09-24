@@ -320,7 +320,16 @@ test("system witch rules reject self-save on every night and invalid potion reus
     assert.ok(actor);
     let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
     if (actor.step.id === "wolves_kill") payload.targetSeats = [savedTarget];
-    else if (actor.step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: true, poisonTargetSeat: 0 };
+    else if (actor.step.id === "witch_action") {
+      const bothPotions = await post(`/api/rooms/${potionReuse.id}/night-action`, {
+        clientId: actor.player.clientId,
+        antidoteUsed: true,
+        poisonTargetSeat: exileTarget
+      });
+      assert.equal(bothPotions.status, 400);
+      assert.match(bothPotions.body.error, /同一晚不能同时使用解药和毒药/);
+      payload = { clientId: actor.player.clientId, antidoteUsed: true, poisonTargetSeat: 0 };
+    }
     else if (actor.step.targetCount > 0) payload.targetSeats = [exileTarget];
     assert.equal((await post(`/api/rooms/${potionReuse.id}/night-action`, payload)).status, 200);
   }

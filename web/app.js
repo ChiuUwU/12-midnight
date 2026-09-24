@@ -303,7 +303,7 @@
       allowSkip: false,
       antidoteAvailable,
       poisonAvailable,
-      singlePotionPerNight: room && ["realm_of_trickery", "dawn_voyage"].includes(room.boardId)
+      singlePotionPerNight: true
     };
   }
 
@@ -2744,7 +2744,7 @@
         return;
       }
       if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) {
-        window.alert("本版型中，女巫同一晚不能同时使用解药和毒药");
+        window.alert("女巫同一晚不能同时使用解药和毒药");
         return;
       }
 
