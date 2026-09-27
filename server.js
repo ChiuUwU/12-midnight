@@ -84,7 +84,7 @@ function createWitchStep(room) {
   const antidoteAvailable = !hasUsedWitchAntidote(room);
   const poisonAvailable = !hasUsedWitchPoison(room);
   if (!antidoteAvailable && !poisonAvailable) return null;
-  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable, singlePotionPerNight: room && ["realm_of_trickery", "dawn_voyage"].includes(room.boardId) };
+  return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable, singlePotionPerNight: true };
 }
 
 function getAvailableSwapSeats(room, stepId) {
@@ -223,6 +223,15 @@ function createNightSteps(boardId, night, room = null) {
     common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) common.push(witchStep);
     common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+  } else if (boardId === "wolf_king_guard") {
+    const witchStep = createWitchStep(room);
+    common.push(
+      { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
+      { id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true }
+    );
+    if (witchStep) common.push(witchStep);
+    common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    if (firstNight) common.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
   } else if (boardId === "pre_witch_hunter_idiot_mixed") {
     if (firstNight) common.push({ id: "mixed_blood_model", actor: "mixed_blood", label: "混血儿选择榜样", targetCount: 1, allowSkip: false });
     const witchStep = createWitchStep(room);
@@ -433,6 +442,7 @@ function getWolfTeamRoleIds(boardId) {
   if (boardId === "dawn_voyage") return ["wolf", "siren"];
   if (boardId === "treasure_master") return ["wolf", "wolf_king"];
   if (boardId === "follow_neighbor") return ["wolf", "wolf_king"];
+  if (boardId === "wolf_king_guard") return ["wolf", "wolf_king"];
   return ["wolf"];
 }
 
@@ -1420,12 +1430,12 @@ async function handleApi(request, response, url) {
       const antidoteTargetSeat = antidoteUsed && wolfAction && wolfAction.targetSeats ? Number(wolfAction.targetSeats[0]) : 0;
       if (antidoteUsed && !antidoteTargetSeat) return sendError(response, 400, "今晚无人被击杀，不能使用解药");
       const witchSeat = (room.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
-      if (antidoteUsed && room.night === 1 && antidoteTargetSeat === witchSeat) return sendError(response, 400, "女巫首夜不能自救");
+      if (antidoteUsed && antidoteTargetSeat === witchSeat) return sendError(response, 400, "女巫不能自救");
       const requestedPoisonSeat = Number(body.poisonTargetSeat || 0);
       const poisonTargetSeat = step.poisonAvailable && requestedPoisonSeat >= 1 && requestedPoisonSeat <= 12 ? requestedPoisonSeat : 0;
       if (requestedPoisonSeat && !poisonTargetSeat) return sendError(response, 400, "毒药目标不合法或毒药已经使用");
       if (poisonTargetSeat && !(room.assignments || []).some((item) => item.seat === poisonTargetSeat && item.alive !== false)) return sendError(response, 400, "毒药只能选择存活玩家");
-      if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) return sendError(response, 400, "本版型中，女巫同一晚不能同时使用解药和毒药");
+      if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) return sendError(response, 400, "女巫同一晚不能同时使用解药和毒药");
       const actionRecord = {
         night: room.night,
         stepId: step.id,

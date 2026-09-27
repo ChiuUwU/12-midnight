@@ -46,7 +46,7 @@
     sheriffEnabled: true,
     lastWordsEnabled: true,
     nightDeathLastWords: false,
-    witchCanSelfSaveFirstNight: false,
+    witchCanSelfSave: false,
     witchAntidoteCount: 1,
     witchPoisonCount: 1,
     guardCanRepeatTarget: false,
@@ -58,7 +58,7 @@
 
   const ROLES = {
     seer: { id: "seer", name: "预言家", camp: "GOOD", image: "assets/roles/seer.png", summary: "每晚必须查验一名玩家，获得好人或狼人结果。" },
-    witch: { id: "witch", name: "女巫", camp: "GOOD", image: "assets/roles/witch.png", summary: "拥有一瓶解药和一瓶毒药。首夜不可自救。" },
+    witch: { id: "witch", name: "女巫", camp: "GOOD", image: "assets/roles/witch.png", summary: "拥有一瓶解药和一瓶毒药。整局不可自救。" },
     hunter: { id: "hunter", name: "猎人", camp: "GOOD", image: "assets/roles/hunter.png", summary: "被狼刀或放逐时可开枪；被毒或作为最后一神时不能开枪。" },
     idiot: { id: "idiot", name: "白痴", camp: "GOOD", image: "assets/roles/idiot.png", summary: "被放逐后出局并公布身份。" },
     villager: { id: "villager", name: "平民", camp: "GOOD", image: "assets/roles/villager.png", summary: "无夜间技能，依靠发言和投票帮助好人阵营获胜。" },
@@ -195,6 +195,23 @@
       globalRules: DEFAULT_RULES
     },
     {
+      id: "wolf_king_guard",
+      name: "狼王守卫",
+      playerCount: 12,
+      roles: [
+        { roleId: "seer", count: 1, camp: "GOOD" },
+        { roleId: "witch", count: 1, camp: "GOOD" },
+        { roleId: "guard", count: 1, camp: "GOOD" },
+        { roleId: "hunter", count: 1, camp: "GOOD" },
+        { roleId: "villager", count: 4, camp: "GOOD" },
+        { roleId: "wolf_king", count: 1, camp: "WOLF" },
+        { roleId: "wolf", count: 3, camp: "WOLF" }
+      ],
+      roleSummary: "预言家 · 女巫 · 守卫 · 猎人 · 平民×4 · 狼王 · 狼人×3",
+      tagline: "狼王临场，守卫执夜。席间风起，黑白交锋。",
+      globalRules: DEFAULT_RULES
+    },
+    {
       id: "follow_neighbor",
       name: "唯邻是从",
       playerCount: 12,
@@ -286,7 +303,7 @@
       allowSkip: false,
       antidoteAvailable,
       poisonAvailable,
-      singlePotionPerNight: room && ["realm_of_trickery", "dawn_voyage"].includes(room.boardId)
+      singlePotionPerNight: true
     };
   }
 
@@ -399,6 +416,15 @@
       steps.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true });
       if (witchStep) steps.push(witchStep);
       steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+    } else if (boardId === "wolf_king_guard") {
+      const witchStep = createWitchStep(room);
+      steps.push(
+        { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
+        { id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true }
+      );
+      if (witchStep) steps.push(witchStep);
+      steps.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+      if (firstNight) steps.push({ id: "hunter_confirm", actor: "hunter", label: "猎人确认身份", targetCount: 0, allowSkip: false });
     } else if (boardId === "pre_witch_hunter_idiot_mixed") {
       if (firstNight) steps.push({ id: "mixed_blood_model", actor: "mixed_blood", label: "混血儿选择榜样", targetCount: 1, allowSkip: false });
       const witchStep = createWitchStep(room);
@@ -909,7 +935,7 @@
     const targetSeat = getWitchAntidoteTarget(room);
     if (!targetSeat) return false;
     const witchSeat = (room?.assignments || []).find((item) => item.roleId === "witch")?.seat || 0;
-    return room.night !== 1 || targetSeat !== witchSeat;
+    return targetSeat !== witchSeat;
   }
 
   function formatNightAction(action) {
@@ -2718,7 +2744,7 @@
         return;
       }
       if (step.singlePotionPerNight && antidoteUsed && poisonTargetSeat) {
-        window.alert("本版型中，女巫同一晚不能同时使用解药和毒药");
+        window.alert("女巫同一晚不能同时使用解药和毒药");
         return;
       }
 
