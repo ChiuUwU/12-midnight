@@ -8,6 +8,7 @@ const {
   getDeathSkillResolution,
   getGameOutcome
 } = require("../web/night-resolution");
+const { resolveNightTarget, syncNightTargetResolutions } = require("../web/target-mapping");
 
 const port = crypto.randomInt(20000, 40000);
 const baseUrl = `http://127.0.0.1:${port}`;
@@ -70,7 +71,7 @@ async function runMechanicalNight(id, clientId, judgeToken, { wolfTarget = 3, po
   return response.body.room;
 }
 
-async function newMechanicalRoom() {
+async function newMechanicalRoom({ recordExile = true, daybreakSeats = [], recordDaybreak = true } = {}) {
   const clientId = `client-${Date.now()}-${crypto.randomInt(10000)}`;
   const created = await post("/api/rooms", { clientId, boardId: "mechanical_wolf_spirit_medium" });
   const id = created.body.room.id;
@@ -80,12 +81,83 @@ async function newMechanicalRoom() {
   const dealt = await post(`/api/rooms/${id}/deal`, auth);
   const wolfTarget = dealt.body.room.assignments.find((item) => item.roleId === "villager").seat;
   await runMechanicalNight(id, clientId, judgeToken, { wolfTarget, useAntidote: true });
-  const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] });
-  assert.equal(death.status, 200);
-  const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true });
-  assert.equal(exile.status, 200);
-  return { clientId, id, judgeToken };
+  if (recordDaybreak) {
+    const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: daybreakSeats });
+    assert.equal(death.status, 200);
+  }
+  if (recordExile) {
+    const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true });
+    assert.equal(exile.status, 200);
+  }
+  return { clientId, id, judgeToken, wolfTarget };
 }
+
+test("daily records reject duplicates and dead exile targets; ballots count each living voter once", async () => {
+  const { clientId, id, judgeToken } = await newMechanicalRoom({ recordExile: false, daybreakSeats: [3] });
+  const auth = { clientId, judgeToken };
+
+  assert.equal((await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] })).status, 400);
+  assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...auth, seat: 3, noExile: false })).status, 400);
+
+  assert.equal((await post(`/api/rooms/${id}/sheriff-candidates`, { ...auth, seats: [1, 2, 4] })).status, 200);
+  let sheriff = await post(`/api/rooms/${id}/sheriff-vote`, {
+    ...auth,
+    round: 1,
+    votes: [
+      { voterSeat: 5, targetSeat: 1 },
+      { voterSeat: 6, targetSeat: 2 },
+      { voterSeat: 5, targetSeat: 2 },
+      { voterSeat: 3, targetSeat: 1 },
+      { voterSeat: 99, targetSeat: 1 }
+    ]
+  });
+  assert.equal(sheriff.status, 200);
+  assert.deepEqual(sheriff.body.room.sheriffVoteRecord.counts, { 1: 1, 2: 1, 4: 0 });
+  assert.deepEqual(sheriff.body.room.sheriffVoteRecord.pkSeats, [1, 2]);
+
+  sheriff = await post(`/api/rooms/${id}/sheriff-vote`, {
+    ...auth,
+    round: 2,
+    pkSeats: [1, 2, 4],
+    votes: [
+      ...Array.from({ length: 9 }, (_, index) => ({ voterSeat: index + 4, targetSeat: 1 })),
+      { voterSeat: 4, targetSeat: 2 }
+    ]
+  });
+  assert.equal(sheriff.status, 200);
+  assert.equal(sheriff.body.room.sheriffVoteRecord.counts[1], 9);
+  assert.equal(sheriff.body.room.sheriffVoteRecord.votes.length, 9);
+
+  let dayVote = await post(`/api/rooms/${id}/day-vote`, {
+    ...auth,
+    round: 1,
+    votes: [
+      { voterSeat: 4, targetSeat: 1 },
+      { voterSeat: 5, targetSeat: 2 },
+      { voterSeat: 4, targetSeat: 2 },
+      { voterSeat: 3, targetSeat: 1 },
+      { voterSeat: 99, targetSeat: 2 },
+      { voterSeat: 6, targetSeat: 99 }
+    ]
+  });
+  assert.equal(dayVote.status, 200);
+  assert.deepEqual(dayVote.body.room.dayVoteRecord.counts, Object.assign(Object.fromEntries(Array.from({ length: 12 }, (_, index) => index + 1).filter((seat) => seat !== 3).map((seat) => [seat, 0])), { 1: 1, 2: 1 }));
+
+  dayVote = await post(`/api/rooms/${id}/day-vote`, {
+    ...auth,
+    round: 2,
+    pkSeats: [1, 2, 4],
+    votes: [
+      ...Array.from({ length: 9 }, (_, index) => ({ voterSeat: index + 4, targetSeat: 1 })),
+      { voterSeat: 4, targetSeat: 2 }
+    ]
+  });
+  assert.equal(dayVote.status, 200);
+  assert.equal(dayVote.body.room.dayVoteRecord.counts[1], 9);
+  assert.equal(dayVote.body.room.dayVoteRecord.votes.length, 9);
+  assert.equal((await post(`/api/rooms/${id}/day-vote`, { ...auth, round: 1, votes: [] })).status, 400);
+  assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true })).status, 400);
+});
 
 test("judge can record first-night deaths before optional sheriff records", async () => {
   const clientId = `daybreak-${Date.now()}-${crypto.randomInt(10000)}`;
@@ -102,6 +174,18 @@ test("judge can record first-night deaths before optional sheriff records", asyn
   assert.equal(recorded.status, 200);
   assert.equal(recorded.body.room.sheriffElectionDone, false);
   assert.deepEqual(recorded.body.room.deathRecords.at(-1).seats, [wolfTarget]);
+});
+
+test("judge may undo the latest daybreak record only before dependent settlement", async () => {
+  const { clientId, id, judgeToken, wolfTarget } = await newMechanicalRoom({ recordExile: false, recordDaybreak: false });
+  const auth = { clientId, judgeToken };
+  const recorded = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [wolfTarget] });
+  assert.equal(recorded.status, 200);
+  const corrected = await post(`/api/rooms/${id}/day-record-correct`, auth);
+  assert.equal(corrected.status, 200);
+  assert.equal(corrected.body.room.aliveSeats.includes(wolfTarget), true);
+  assert.equal(corrected.body.room.deathRecords.some((record) => record.day === corrected.body.room.night && record.phase === "DAYBREAK"), false);
+  assert.equal((await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] })).status, 200);
 });
 
 test("backend keeps explicit reasons private and stores authoritative fallback reasons", async () => {
@@ -204,6 +288,53 @@ function resolutionRoom(boardId, actions, extra = {}) {
   };
 }
 
+test("night target mapping keeps intent, ordered mapping chain and final target auditable", () => {
+  const room = resolutionRoom("realm_of_trickery", [
+    {
+      night: 2,
+      stepId: "magician_swap",
+      targetSeats: [1, 2],
+      targetMapping: { id: "magician_swap", kind: "SWAP", targetSeats: [1, 2], appliesTo: ["wolves_kill", "seer_check"], order: 100 }
+    },
+    {
+      night: 2,
+      stepId: "wolf_warlock_swap",
+      targetSeats: [2, 3],
+      targetMapping: { id: "wolf_warlock_swap", kind: "SWAP", targetSeats: [2, 3], appliesTo: ["wolves_kill"], order: 200 }
+    },
+    { night: 2, stepId: "wolves_kill", targetSeats: [1] },
+    { night: 2, stepId: "seer_check", targetSeats: [1] }
+  ]);
+
+  assert.deepEqual(resolveNightTarget(room, { night: 2, scope: "wolves_kill", seat: 1 }), {
+    originalSeat: 1,
+    effectiveSeat: 3,
+    mappingIds: ["magician_swap", "wolf_warlock_swap"]
+  });
+  assert.deepEqual(resolveNightTarget(room, { night: 2, scope: "seer_check", seat: 1 }), {
+    originalSeat: 1,
+    effectiveSeat: 2,
+    mappingIds: ["magician_swap"]
+  });
+
+  syncNightTargetResolutions(room, 2);
+  const wolfKill = room.nightActions.find((action) => action.stepId === "wolves_kill");
+  const seerCheck = room.nightActions.find((action) => action.stepId === "seer_check");
+  assert.deepEqual(wolfKill.targetResolution, [{ scope: "wolves_kill", originalSeat: 1, effectiveSeat: 3, mappingIds: ["magician_swap", "wolf_warlock_swap"] }]);
+  assert.deepEqual(seerCheck.targetResolution, [{ scope: "seer_check", originalSeat: 1, effectiveSeat: 2, mappingIds: ["magician_swap"] }]);
+});
+
+test("legacy magician records retain their original night mapping behavior", () => {
+  const room = resolutionRoom("realm_of_trickery", [
+    { night: 2, stepId: "magician_swap", targetSeats: [2, 3] },
+    { night: 2, stepId: "wolves_kill", targetSeats: [2] },
+    { night: 2, stepId: "witch_action", antidoteUsed: false, poisonTargetSeat: 2 }
+  ]);
+  assert.deepEqual(calculateSuggestedDeaths(room), [
+    { seat: 3, reasons: ["狼刀", "女巫毒"] }
+  ]);
+});
+
 test("calculator derives knife, poison and same-guard-save milk death", () => {
   const ordinary = resolutionRoom("pre_witch_hunter_idiot_mixed", [
     { night: 2, stepId: "wolves_kill", targetSeats: [3] },
@@ -234,6 +365,33 @@ test("calculator applies Dawn Voyage wind and drowning", () => {
     { night: 2, stepId: "wolves_kill", targetSeats: [2] }
   ], { windDirection: "tailwind", boardedSeat: 4 });
   assert.deepEqual(calculateSuggestedDeaths(room), [{ seat: 3, reasons: ["溺亡", "狼刀"] }]);
+});
+
+test("dreamer and treasure-dreamer keep independent protections and death links", () => {
+  const assignments = Array.from({ length: 12 }, (_, index) => ({
+    seat: index + 1,
+    roleId: index === 0 ? "dreamer" : index === 1 ? "treasure_master" : "villager",
+    camp: index === 1 ? "WOLF" : "GOOD",
+    alive: true
+  }));
+  const splitSources = resolutionRoom("treasure_master", [
+    { night: 1, stepId: "dreamer_dream", targetSeats: [5] },
+    { night: 1, stepId: "treasure_skill", cardRoleId: "dreamer", targetSeats: [6] },
+    { night: 2, stepId: "dreamer_dream", targetSeats: [6] },
+    { night: 2, stepId: "treasure_skill", cardRoleId: "dreamer", targetSeats: [5] },
+    { night: 2, stepId: "wolves_kill", targetSeats: [5] },
+    { night: 2, stepId: "poisoner_poison", targetSeats: [6] }
+  ], { assignments });
+  assert.deepEqual(calculateSuggestedDeaths(splitSources), []);
+
+  const linkedDeath = resolutionRoom("treasure_master", [
+    { night: 2, stepId: "dreamer_dream", targetSeats: [2] },
+    { night: 2, stepId: "wolves_kill", targetSeats: [1] }
+  ], { assignments: assignments.map((item, index) => ({ ...item, roleId: index === 0 ? "dreamer" : "villager", camp: "GOOD" })) });
+  assert.deepEqual(calculateSuggestedDeaths(linkedDeath), [
+    { seat: 1, reasons: ["狼刀"] },
+    { seat: 2, reasons: ["摄梦人死亡连锁"] }
+  ]);
 });
 
 test("Follow Neighbor silently disables puppet witch and guard effects", () => {

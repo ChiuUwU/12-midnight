@@ -22,12 +22,12 @@ async function getRoom(id, clientId, judgeToken = "") {
   return (await (await fetch(`${baseUrl}/api/rooms/${id}?${query}`)).json()).room;
 }
 
-async function createSystemRoom(suffix) {
+async function createSystemRoom(suffix, boardId = "pre_witch_hunter_idiot_mixed") {
   const controllerId = `controller-${suffix}-${Date.now()}`;
   const created = await post("/api/rooms", {
     clientId: controllerId,
     mode: "SYSTEM",
-    boardId: "pre_witch_hunter_idiot_mixed"
+    boardId
   });
   assert.equal(created.status, 200);
   const players = Array.from({ length: 12 }, (_, index) => ({ clientId: `${suffix}-player-${index + 1}`, seat: index + 1 }));
@@ -240,6 +240,10 @@ test("system mode publicly reveals an exiled idiot as white god", async () => {
   const game = await createSystemRoom("white-god-reveal");
   const idiot = game.views.find((item) => item.room.assignments[0].roleId === "idiot");
   assert.ok(idiot);
+  const privateReveal = await post(`/api/rooms/${game.id}/reveal`, { clientId: idiot.player.clientId });
+  assert.equal(privateReveal.status, 200);
+  assert.deepEqual(privateReveal.body.room.publicReveals, []);
+  assert.deepEqual((await getRoom(game.id, "white-god-observer")).publicReveals, []);
   await completeSafeSystemNight(game);
   const exiled = await post(`/api/rooms/${game.id}/exile-record`, {
     ...game.controllerAuth,
@@ -249,6 +253,21 @@ test("system mode publicly reveals an exiled idiot as white god", async () => {
   assert.equal(exiled.status, 200);
   assert.equal(exiled.body.room.latestPublicAnnouncement.text, `${idiot.room.assignments[0].seat}号玩家出局，翻牌为白神。`);
   assert.deepEqual(exiled.body.room.publicReveals, [{ seat: idiot.room.assignments[0].seat, roleId: "idiot" }]);
+});
+
+test("local API rejects unknown board IDs", async () => {
+  const result = await post("/api/rooms", { clientId: `unknown-board-${Date.now()}`, boardId: "not-a-board" });
+  assert.equal(result.status, 400);
+  assert.match(result.body.error, /版型不存在/);
+});
+
+test("mechanical wolf cannot self-destruct in system mode", async () => {
+  const game = await createSystemRoom("mechanical-self-destruct", "mechanical_wolf_spirit_medium");
+  const mechanicalWolf = game.views.find((item) => item.room.assignments[0].roleId === "mechanical_wolf");
+  assert.ok(mechanicalWolf);
+  await completeSafeSystemNight(game);
+  const rejected = await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: mechanicalWolf.player.clientId });
+  assert.equal(rejected.status, 403);
 });
 
 test("system witch rules reject self-save on every night and invalid potion reuse", async () => {
@@ -471,6 +490,25 @@ test("system controller transfer rotates authority and only permits the old cont
   assert.equal((await post(`/api/rooms/${afterDeal.id}/seat`, { ...afterDeal.controllerAuth, seat: 1 })).status, 400);
 });
 
+test("system controller transfer locks after five invalid codes and a new code resets the lock", async () => {
+  const controllerId = `transfer-lock-${Date.now()}`;
+  const created = await post("/api/rooms", { clientId: controllerId, mode: "SYSTEM", boardId: "pre_witch_hunter_idiot_mixed" });
+  const id = created.body.room.id;
+  const auth = { clientId: controllerId, judgeToken: created.body.judgeToken };
+  const started = await post(`/api/rooms/${id}/controller-transfer-start`, auth);
+  const claimant = `transfer-claim-${Date.now()}`;
+  const wrongCode = String((Number(started.body.controllerTransferCode) + 1) % 1000000).padStart(6, "0");
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const result = await post(`/api/rooms/${id}/controller-transfer-claim`, { clientId: claimant, controllerTransferCode: wrongCode });
+    assert.ok([403, 429].includes(result.status));
+  }
+  assert.equal((await post(`/api/rooms/${id}/controller-transfer-claim`, { clientId: claimant, controllerTransferCode: started.body.controllerTransferCode })).status, 429);
+  const restarted = await post(`/api/rooms/${id}/controller-transfer-start`, auth);
+  assert.equal(restarted.status, 200);
+  const claimed = await post(`/api/rooms/${id}/controller-transfer-claim`, { clientId: claimant, controllerTransferCode: restarted.body.controllerTransferCode });
+  assert.equal(claimed.status, 200);
+});
+
 test("stale remote mutations are rejected before they can overwrite the first valid write", async () => {
   const created = await post("/api/rooms", {
     clientId: `revision-controller-${Date.now()}`,
@@ -507,8 +545,32 @@ test("system timeout is optional, starts with the actionable step, and cannot be
   assert.equal((await post(`/api/rooms/${id}/system-timeout-skip`, controllerAuth)).status, 400);
 });
 
+test("system-mode Order Prince may privately trigger the controller's offline revote", async () => {
+  const game = await createSystemRoom("order-prince", "realm_of_trickery");
+  await completeSafeSystemNight(game);
+  const prince = game.views.find((item) => item.room.assignments[0].roleId === "order_prince");
+  const target = game.views.find((item) => item.room.assignments[0].roleId === "villager");
+  assert.ok(prince);
+  assert.ok(target);
+  const controllerRoom = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+  const votes = controllerRoom.aliveSeats.map((voterSeat) => ({ voterSeat, targetSeat: target.room.assignments[0].seat }));
+  const firstVote = await post(`/api/rooms/${game.id}/day-vote`, { ...game.controllerAuth, round: 1, votes, orderPrinceRevote: false });
+  assert.equal(firstVote.status, 200);
+  assert.ok(firstVote.body.room.pendingExileResult);
+  const princeView = await getRoom(game.id, prince.player.clientId);
+  assert.ok(princeView.pendingExileResult);
+  const activated = await post(`/api/rooms/${game.id}/order-prince-activate`, { clientId: prince.player.clientId });
+  assert.equal(activated.status, 200);
+  assert.equal(activated.body.room.orderPrinceRevotePending, false, "王子本人不应获得控制端重投状态");
+  const afterActivation = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+  assert.equal(afterActivation.orderPrinceRevotePending, true);
+  const revote = await post(`/api/rooms/${game.id}/day-vote`, { ...game.controllerAuth, round: 1, votes, orderPrinceRevote: true });
+  assert.equal(revote.status, 200);
+  assert.equal(revote.body.room.systemDayOutcomeRecorded, true);
+});
+
 test("all complex boards can complete two system-guided nights", async () => {
-  const boardIds = ["masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage", "wolf_king_guard", "follow_neighbor"];
+  const boardIds = ["pre_witch_hunter_idiot_mixed", "masquerade", "treasure_master", "mechanical_wolf_spirit_medium", "realm_of_trickery", "dawn_voyage", "wolf_king_guard", "follow_neighbor"];
   const expectedSecondNightSteps = {
     masquerade: ["dancer_dance", "mask_check", "mask_give"],
     treasure_master: ["treasure_pick", "treasure_skill", "wolves_kill"],
@@ -516,7 +578,8 @@ test("all complex boards can complete two system-guided nights", async () => {
     realm_of_trickery: ["magician_swap", "trickster_swap"],
     dawn_voyage: ["siren_wind", "captain_board"],
     wolf_king_guard: [],
-    follow_neighbor: []
+    follow_neighbor: [],
+    pre_witch_hunter_idiot_mixed: []
   };
   for (const boardId of boardIds) {
     const controllerId = `controller-${boardId}-${Date.now()}`;
@@ -558,6 +621,7 @@ test("all complex boards can complete two system-guided nights", async () => {
         const candidates = (step.allowedSeats?.length ? step.allowedSeats : actor.room.aliveSeats).filter(Boolean);
         let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
         if (step.id === "wolves_kill") payload.skipped = true;
+        else if (step.id === "poisoner_poison" && boardId === "treasure_master" && nightNumber === 1) payload.targetSeats = [candidates[0]];
         else if (["poisoner_poison", "mechanical_poison", "mechanical_kill"].includes(step.id)) payload.skipped = true;
         else if (step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
         else if (step.id === "siren_wind") payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false, windDirection: nightNumber === 1 ? "calm" : "tailwind" };
@@ -586,8 +650,10 @@ test("all complex boards can complete two system-guided nights", async () => {
 
     const firstNightSteps = await runNight(1);
     if (boardId === "follow_neighbor") assert.ok(firstNightSteps.includes("puppet_select"));
+    // 盗宝牌会随机抽走一张神职；仅在场上确有毒师时才会出现该步骤。
     assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...controllerAuth, noExile: true, seat: 0 })).status, 200);
     const secondNightSteps = await runNight(2);
     expectedSecondNightSteps[boardId].forEach((stepId) => assert.ok(secondNightSteps.includes(stepId), `${boardId} missing ${stepId}`));
+    if (boardId === "treasure_master" && firstNightSteps.includes("poisoner_poison")) assert.equal(secondNightSteps.includes("poisoner_poison"), false);
   }
 });
