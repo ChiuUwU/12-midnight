@@ -71,7 +71,7 @@ async function runMechanicalNight(id, clientId, judgeToken, { wolfTarget = 3, po
   return response.body.room;
 }
 
-async function newMechanicalRoom({ recordExile = true, daybreakSeats = [] } = {}) {
+async function newMechanicalRoom({ recordExile = true, daybreakSeats = [], recordDaybreak = true } = {}) {
   const clientId = `client-${Date.now()}-${crypto.randomInt(10000)}`;
   const created = await post("/api/rooms", { clientId, boardId: "mechanical_wolf_spirit_medium" });
   const id = created.body.room.id;
@@ -81,13 +81,15 @@ async function newMechanicalRoom({ recordExile = true, daybreakSeats = [] } = {}
   const dealt = await post(`/api/rooms/${id}/deal`, auth);
   const wolfTarget = dealt.body.room.assignments.find((item) => item.roleId === "villager").seat;
   await runMechanicalNight(id, clientId, judgeToken, { wolfTarget, useAntidote: true });
-  const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: daybreakSeats });
-  assert.equal(death.status, 200);
+  if (recordDaybreak) {
+    const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: daybreakSeats });
+    assert.equal(death.status, 200);
+  }
   if (recordExile) {
     const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true });
     assert.equal(exile.status, 200);
   }
-  return { clientId, id, judgeToken };
+  return { clientId, id, judgeToken, wolfTarget };
 }
 
 test("daily records reject duplicates and dead exile targets; ballots count each living voter once", async () => {
@@ -175,11 +177,13 @@ test("judge can record first-night deaths before optional sheriff records", asyn
 });
 
 test("judge may undo the latest daybreak record only before dependent settlement", async () => {
-  const { clientId, id, judgeToken } = await newMechanicalRoom({ recordExile: false, daybreakSeats: [3] });
+  const { clientId, id, judgeToken, wolfTarget } = await newMechanicalRoom({ recordExile: false, recordDaybreak: false });
   const auth = { clientId, judgeToken };
+  const recorded = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [wolfTarget] });
+  assert.equal(recorded.status, 200);
   const corrected = await post(`/api/rooms/${id}/day-record-correct`, auth);
   assert.equal(corrected.status, 200);
-  assert.equal(corrected.body.room.aliveSeats.includes(3), true);
+  assert.equal(corrected.body.room.aliveSeats.includes(wolfTarget), true);
   assert.equal(corrected.body.room.deathRecords.some((record) => record.day === corrected.body.room.night && record.phase === "DAYBREAK"), false);
   assert.equal((await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] })).status, 200);
 });
