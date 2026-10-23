@@ -89,6 +89,7 @@ function assignCards(seats, cards) {
     alive: true,
     sheriff: false,
     revealed: false,
+    publiclyRevealed: false,
     abilityState: {
       treasureCards: shuffledCards[index].treasureCards || undefined
     },

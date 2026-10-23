@@ -9,7 +9,7 @@ const ROLES = {
     id: "witch",
     name: "女巫",
     camp: "GOOD",
-    summary: "拥有一瓶解药和一瓶毒药。首夜不可自救。"
+    summary: "拥有一瓶解药和一瓶毒药。整局不可自救。"
   },
   hunter: {
     id: "hunter",

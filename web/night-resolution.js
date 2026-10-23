@@ -1,23 +1,12 @@
 (function (root, factory) {
-  const api = factory();
+  const targetMapping = root.TargetMapping || (typeof require === "function" ? require("./target-mapping") : null);
+  const api = factory(targetMapping);
   if (typeof module === "object" && module.exports) module.exports = api;
   else root.NightResolution = api;
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
-  function activeSwapPair(room, stepId, night) {
-    const action = (room.nightActions || []).find((item) => item.night === night && item.stepId === stepId && !item.skipped && !item.invalidByConflict);
-    return action && action.targetSeats && action.targetSeats.length === 2 ? action.targetSeats.map(Number) : [];
-  }
-
-  function mapWithPair(seat, pair) {
-    const value = Number(seat || 0);
-    if (!value || pair.length !== 2) return value;
-    if (value === pair[0]) return pair[1];
-    if (value === pair[1]) return pair[0];
-    return value;
-  }
-
-  function mapNightSeat(room, seat, night) {
-    return room.boardId === "realm_of_trickery" ? mapWithPair(seat, activeSwapPair(room, "magician_swap", night)) : Number(seat || 0);
+})(typeof globalThis !== "undefined" ? globalThis : this, function (targetMapping) {
+  function mapNightSeat(room, seat, night, scope) {
+    if (!targetMapping) return Number(seat || 0);
+    return targetMapping.resolveNightTarget(room, { night, scope, seat }).effectiveSeat;
   }
 
   function applyWind(seat, wind, boardedSeat) {
@@ -56,21 +45,24 @@
       deaths.set(seat, reasons);
     };
 
-    let wolfKill = mapNightSeat(room, firstTarget("treasure_mask_final_kill") || firstTarget("wolves_kill"), night);
+    let wolfKill = mapNightSeat(room, firstTarget("treasure_mask_final_kill") || firstTarget("wolves_kill"), night, "wolves_kill");
     const witchAction = actions.find((item) => item.stepId === "witch_action");
-    let antidote = mapNightSeat(room, witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote"), night);
-    let witchPoison = mapNightSeat(room, witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison"), night);
+    let antidote = mapNightSeat(room, witchAction && witchAction.antidoteUsed ? Number(witchAction.antidoteTargetSeat) : firstTarget("witch_antidote"), night, "witch_antidote");
+    let witchPoison = mapNightSeat(room, witchAction && Number(witchAction.poisonTargetSeat) ? Number(witchAction.poisonTargetSeat) : firstTarget("witch_poison"), night, "witch_poison");
     const treasureSkill = actions.find((item) => item.stepId === "treasure_skill" && !item.skipped);
     const treasureTarget = treasureSkill && treasureSkill.targetSeats && Number(treasureSkill.targetSeats[0]) || 0;
     const treasureRole = treasureSkill?.cardRoleId || "";
-    const poisonerPoison = firstTarget("poisoner_poison") || (treasureRole === "poisoner" ? treasureTarget : 0);
+    const poisonerPoison = firstTarget("poisoner_poison");
+    const treasurePoison = treasureRole === "poisoner" ? treasureTarget : 0;
     let guard = firstTarget("guard_guard");
     const mechanicalGuard = firstTarget("mechanical_guard");
     const mechanicalPoison = firstTarget("mechanical_poison");
     const mechanicalKill = firstTarget("mechanical_kill");
-    const dream = firstTarget("dreamer_dream") || (treasureRole === "dreamer" ? treasureTarget : 0);
     const previousTreasureDream = previousActions.find((item) => item.stepId === "treasure_skill" && item.cardRoleId === "dreamer" && !item.skipped);
-    const previousDream = firstTarget("dreamer_dream", previousActions) || (previousTreasureDream && Number(previousTreasureDream.targetSeats?.[0]) || 0);
+    const dreamSources = [
+      { source: "native", seat: (room.assignments || []).find((item) => item.roleId === "dreamer")?.seat || 0, target: firstTarget("dreamer_dream"), previousTarget: firstTarget("dreamer_dream", previousActions) },
+      { source: "treasure", seat: (room.assignments || []).find((item) => item.roleId === "treasure_master")?.seat || 0, target: treasureRole === "dreamer" ? treasureTarget : 0, previousTarget: Number(previousTreasureDream?.targetSeats?.[0] || 0) }
+    ].filter((item) => item.target);
     const witchPoisonImmuneRoles = room.boardId === "masquerade" ? ["dancer", "mask"] : [];
     const danceAction = actions.find((item) => item.stepId === "dancer_dance" && !item.skipped);
     const danceSeats = danceAction?.targetSeats?.map(Number) || [];
@@ -98,8 +90,11 @@
     addDeath(wolfKill, "狼刀");
     if (witchPoison && !witchPoisonImmuneRoles.includes(roleAtSeat(witchPoison))) addDeath(witchPoison, "女巫毒");
     addDeath(poisonerPoison, "毒师毒");
+    addDeath(treasurePoison, "毒师毒");
     addDeath(mechanicalPoison, "机械狼毒");
-    if (dream && previousDream && dream === previousDream) addDeath(dream, "连续摄梦");
+    dreamSources.forEach((source) => {
+      if (source.previousTarget && source.target === source.previousTarget) addDeath(source.target, "连续摄梦");
+    });
 
     if (danceSeats.length === 3) {
       const effectiveCamp = (seat) => {
@@ -153,13 +148,30 @@
       addDeath(witchSeat, "机械守卫弹毒");
     }
 
-    if (dream && deaths.has(dream)) {
-      const remaining = deaths.get(dream).filter((reason) => !["狼刀", "女巫毒", "毒师毒", "机械狼毒"].includes(reason));
-      if (remaining.length) deaths.set(dream, remaining);
-      else deaths.delete(dream);
-    }
+    // Each living source independently protects its own target from the ordinary night attacks.
+    dreamSources.forEach((source) => {
+      if (source.previousTarget && source.target === source.previousTarget) return;
+      if (deaths.has(source.seat)) return;
+      const reasons = deaths.get(source.target);
+      if (!reasons) return;
+      const remaining = reasons.filter((reason) => !["狼刀", "女巫毒", "毒师毒", "机械狼毒"].includes(reason));
+      if (remaining.length) deaths.set(source.target, remaining);
+      else deaths.delete(source.target);
+    });
 
     addDeath(mechanicalKill, "机械技能刀");
+
+    // If a dream source dies, its target dies regardless of protection; iterate so chains converge.
+    let propagated = true;
+    while (propagated) {
+      propagated = false;
+      dreamSources.forEach((source) => {
+        if (!deaths.has(source.seat) || deaths.has(source.target)) return;
+        addDeath(source.target, "摄梦人死亡连锁");
+        propagated = true;
+      });
+    }
+
     if (treasureRole === "wolf") addDeath(treasureTarget, "盗宝技能刀");
 
     const delayedDeaths = [];
