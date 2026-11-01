@@ -952,8 +952,17 @@
     });
   }
 
+  function remoteInteractionKey() {
+    const room = state.remoteRoom;
+    return JSON.stringify([state.currentRoomId, state.view, room?.phase, room?.night,
+      room?.mySeat?.seat, room?.currentNightSteps?.[room.currentNightStepIndex || 0]?.id,
+      room?.systemNight?.canAct, room?.systemNight?.timing?.key,
+      room?.activeDarkBallot?.id, room?.activeDaySkillWindow?.id, room?.myDeathSkill?.seat]);
+  }
+
   async function remotePost(action, payload = {}) {
     const requestedRoomId = state.currentRoomId;
+    const interactionKey = remoteInteractionKey();
     try {
       const data = await apiRequest(`/api/rooms/${requestedRoomId}/${action}`, {
         method: "POST",
@@ -969,7 +978,9 @@
     } catch (error) {
       if (error.status === 409 && state.currentRoomId === requestedRoomId) {
         await refreshRemoteRoom().catch(() => {});
-        render();
+        // Keep an unfinished choice only while it still belongs to the same
+        // player and interaction. Never carry a stale target into a new step.
+        if (interactionKey !== remoteInteractionKey() || !hasUnsavedInteraction()) render();
       }
       throw error;
     }

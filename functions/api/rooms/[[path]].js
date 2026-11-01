@@ -794,8 +794,8 @@ async function saveRoom(env, room, effects = {}) {
   const now = Math.max(Date.now(), expectedUpdatedAt + 1);
   room.createdAt = room.createdAt || now;
   room.updatedAt = now;
-  room.revision = Number(room.revision || 0) + 1;
-  const shouldArchive = room.phase !== "WAITING" && (room.assignments || []).length > 0;
+  if (!effects.preserveRevision) room.revision = Number(room.revision || 0) + 1;
+  const shouldArchive = !effects.heartbeat && room.phase !== "WAITING" && (room.assignments || []).length > 0;
   if (shouldArchive) {
     room.archiveId = room.archiveId || randomHex(16);
     await ensureGameArchivesTable(env);
@@ -1928,7 +1928,8 @@ async function handleRoomAction(request, env, route) {
     return submitBallotVote(env, room, route.roomId, body, clientId, judgeToken);
   }
 
-  if (body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
+  const keyedClock = ["system-fixed-night", "system-day-voice"].includes(route.action);
+  if (!keyedClock && route.action !== "reveal" && body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
     return error(409, "房间状态已更新，请刷新后重试");
   }
 
@@ -1943,14 +1944,14 @@ async function handleRoomAction(request, env, route) {
     if (!isController(room, judgeToken) || !dayVoice.enabled(room) || room.phase !== "DAY") return error(403, "只有当前控制设备可以确认技能播报");
     try { dayVoice.control(room, body.operation, body.windowKey); }
     catch(err) { return error(409, err.message); }
-    await saveRoom(env, room);
+    await saveRoom(env, room, { preserveRevision: body.operation === "heartbeat", heartbeat: body.operation === "heartbeat" });
     return json({room: sanitizeRoom(room, {clientId, judgeToken})});
   }
   if (route.action === "system-fixed-night") {
     if (!isController(room, judgeToken) || !fixedNight.enabled(room) || room.phase !== "NIGHT") return error(403, "只有当前控制设备可以推进夜间计时");
     try { fixedNight.control(room, body.operation, body.stepKey); syncNightTargetResolutions(room, room.night); }
     catch (err) { return error(409, err.message); }
-    await saveRoom(env, room);
+    await saveRoom(env, room, { preserveRevision: body.operation === "heartbeat", heartbeat: body.operation === "heartbeat" });
     return json({ room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
   if (route.action === "controller-transfer-start") {
@@ -2049,10 +2050,11 @@ async function handleRoomAction(request, env, route) {
   } else if (route.action === "reveal") {
     const mySeat = room.seats.find((seat) => seat.clientId === clientId);
     const assignment = mySeat ? room.assignments.find((item) => item.seat === mySeat.seat) : null;
-    if (assignment) {
+    if (assignment && !assignment.revealed) {
       assignment.revealed = true;
       writeLog(room, "IDENTITY_VIEWED", { seat: assignment.seat });
     }
+    persistenceEffects.preserveRevision = true;
   } else if (route.action === "night-start") {
     const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
     const canStartDayNextNight = room.phase === "DAY" && (
@@ -2737,7 +2739,17 @@ export async function onRequest(context) {
     }
     const route = parseRoute(url);
     if (!route || !route.roomId) return error(404, "接口不存在");
-    return await handleRoomAction(request, env, route);
+    // Retry only storage CAS conflicts. The fresh attempt still validates the
+    // client's business revision, or the clock's exact window/step key.
+    const retryBody = request.method === "POST" ? await readBody(request.clone()) : {};
+    const mayRetry = retryBody.expectedRevision !== undefined || route.action === "reveal"
+      || ["system-fixed-night", "system-day-voice"].includes(route.action);
+    for (let attempt = 0; ; attempt += 1) {
+      try { return await handleRoomAction(request.clone(), env, route); }
+      catch (err) {
+        if (!(err instanceof RoomConflictError) || !mayRetry || attempt >= 3) throw err;
+      }
+    }
   } catch (err) {
     if (err instanceof RoomConflictError) return error(409, err.message);
     return error(500, err && err.message ? err.message : "服务器错误");

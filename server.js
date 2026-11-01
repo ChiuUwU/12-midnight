@@ -49,9 +49,9 @@ function createJudgeCode() {
   return String(crypto.randomInt(0, 10000)).padStart(4, "0");
 }
 
-function writeLog(room, type, payload) {
+function writeLog(room, type, payload, affectsRevision = true) {
   room.updatedAt = Date.now();
-  room.revision = Number(room.revision || 0) + 1;
+  if (affectsRevision) room.revision = Number(room.revision || 0) + 1;
   room.logs.push({
     id: `${Date.now()}-${room.logs.length}`,
     type,
@@ -1503,7 +1503,8 @@ async function handleApi(request, response, url) {
   }
 
   const sameBallot = target.action === "dark-ballot-vote" && body.ballotId && body.ballotId === room.activeDarkBallot?.id;
-  if (target.action !== "seat" && !sameBallot && body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
+  const keyedClock = ["system-fixed-night", "system-day-voice"].includes(target.action);
+  if (target.action !== "seat" && target.action !== "reveal" && !keyedClock && !sameBallot && body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
     return sendError(response, 409, "房间状态已更新，请刷新后重试");
   }
 
@@ -2504,9 +2505,9 @@ async function handleApi(request, response, url) {
     const assignment = mySeat
       ? room.assignments.find((item) => item.seat === mySeat.seat)
       : null;
-    if (assignment) {
+    if (assignment && !assignment.revealed) {
       assignment.revealed = true;
-      writeLog(room, "IDENTITY_VIEWED", { seat: assignment.seat });
+      writeLog(room, "IDENTITY_VIEWED", { seat: assignment.seat }, false);
     }
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })

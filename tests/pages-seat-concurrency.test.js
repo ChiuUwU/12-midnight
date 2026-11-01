@@ -6,6 +6,66 @@ const { pathToFileURL } = require("node:url");
 
 let onRequestPromise;
 
+async function conflictFixture() {
+  const env = { DB: new MemoryD1() };
+  const created = await request(env, '/api/rooms', {clientId:'conflict-controller', mode:'SYSTEM',boardId:'pre_witch_hunter_idiot_mixed',fixedNightFlow:1});
+  const id=created.body.room.id, auth={clientId:'conflict-controller',judgeToken:created.body.judgeToken};
+  const load=()=>JSON.parse(env.DB.rooms.get(id).data);
+  const room=load();room.phase='NIGHT';room.night=2;
+  room.seats.forEach(s=>{s.clientId=`conflict-${s.seat}`;s.occupied=true;});
+  room.assignments=room.seats.map(({seat})=>({seat,roleId:seat===1?'wolf':seat===2?'seer':'villager',camp:seat===1?'WOLF':'GOOD',alive:true,abilityState:{}}));
+  room.currentNightSteps=[{id:'wolves_kill',actor:'wolf_team',label:'狼人选择目标',targetCount:1,allowSkip:true}];room.currentNightStepIndex=0;
+  room.fixedNightTiming={key:'2:1',phase:'ACTION',deadlineAt:Date.now()+120000,leaseUntil:Date.now()+10000,submitted:false};
+  env.DB.rooms.get(id).data=JSON.stringify(room);
+  return {env,id,auth,load,post:(action,body)=>request(env,`/api/rooms/${id}/${action}`,body)};
+}
+
+test('Pages heartbeats do not invalidate player submissions or rearchive the game', async()=>{
+  const f=await conflictFixture(),revision=f.load().revision;
+  for(let i=0;i<3;i++)assert.equal((await f.post('system-fixed-night',{...f.auth,expectedRevision:revision,operation:'heartbeat',stepKey:'2:1'})).status,200);
+  assert.equal(f.load().revision,revision);assert.equal(f.env.DB.archives.size,0);
+  const action=await f.post('night-action',{clientId:'conflict-1',expectedRevision:revision,targetSeats:[3]});
+  assert.equal(action.status,200,JSON.stringify(action.body));
+  assert.deepEqual(f.load().nightActions.at(-1).targetSeats,[3]);
+  assert.equal((await f.post('system-fixed-night',{...f.auth,expectedRevision:revision,operation:'heartbeat',stepKey:'old-key'})).status,409);
+  assert.equal((await f.post('system-fixed-night',{clientId:'stranger',operation:'heartbeat',stepKey:'2:1'})).status,403);
+});
+
+test('Pages simultaneous identity views are private, idempotent and do not advance business revision',async()=>{
+  const f=await conflictFixture(),revision=f.load().revision;
+  const results=await Promise.all([1,2].map(seat=>f.post('reveal',{clientId:`conflict-${seat}`,expectedRevision:revision-1})));
+  results.forEach((r,i)=>{assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(r.body.room.assignments.length,1);assert.equal(r.body.room.assignments[0].seat,i+1);});
+  assert.equal(f.load().revision,revision);
+  assert.equal(f.load().assignments.filter(a=>a.revealed).length,2);
+  await f.post('reveal',{clientId:'conflict-1',expectedRevision:revision});
+  assert.equal(f.load().logs.filter(l=>l.type==='IDENTITY_VIEWED').length,2);
+});
+
+test('Pages retries storage-only CAS interference but still rejects stale business actions',async()=>{
+  const f=await conflictFixture(),revision=f.load().revision;
+  const prepare=f.env.DB.prepare.bind(f.env.DB);let injected=false;
+  f.env.DB.prepare=sql=>{const stmt=prepare(sql),run=stmt.run;stmt.run=async function(){
+    if(!injected&&sql.startsWith('UPDATE rooms SET data')){injected=true;const row=f.env.DB.rooms.get(f.id);row.updatedAt+=1;}
+    return run.call(this);
+  };return stmt;};
+  const action=await f.post('night-action',{clientId:'conflict-1',expectedRevision:revision,targetSeats:[3]});
+  assert.equal(action.status,200,JSON.stringify(action.body));assert.ok(injected);
+  assert.equal(f.load().nightActions.length,1);
+  const stale=await f.post('night-action',{clientId:'conflict-1',expectedRevision:revision,targetSeats:[4]});
+  assert.equal(stale.status,409);assert.deepEqual(f.load().nightActions.at(-1).targetSeats,[3]);
+});
+
+test('Pages daytime heartbeats retain revision while acknowledgements remain keyed',async()=>{
+  const f=await conflictFixture();const room=f.load();room.phase='DAY';room.pendingDeathSkills=[{seat:3,day:2,eligible:false,createdAt:1}];
+  f.env.DB.rooms.get(f.id).data=JSON.stringify(room);
+  const view=await request(f.env,`/api/rooms/${f.id}?clientId=${f.auth.clientId}&judgeToken=${f.auth.judgeToken}`),key=view.body.room.daySkillVoice.key,revision=room.revision;
+  assert.equal((await f.post('system-day-voice',{...f.auth,operation:'heartbeat',windowKey:key,expectedRevision:revision-1})).status,200);
+  assert.equal(f.load().revision,revision);
+  assert.equal((await f.post('system-day-voice',{...f.auth,operation:'ack',windowKey:key,expectedRevision:revision-1})).status,200);
+  assert.ok(f.load().revision>revision);
+  assert.equal((await f.post('system-day-voice',{...f.auth,operation:'finish',windowKey:'old-key'})).status,409);
+});
+
 function loadPagesFunction() {
   if (!onRequestPromise) {
     const functionPath = path.resolve(__dirname, "../functions/api/rooms/[[path]].js");
