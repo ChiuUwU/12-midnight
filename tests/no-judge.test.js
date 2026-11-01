@@ -9,11 +9,16 @@ const baseUrl = `http://127.0.0.1:${port}`;
 let server;
 
 async function post(route, body) {
-  const response = await fetch(`${baseUrl}${route}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
+  let response;
+  try {
+    response = await fetch(`${baseUrl}${route}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body)
+    });
+  } catch (error) {
+    throw new Error(`POST ${route} failed: ${error.cause?.code || error.message}; server exit=${server?.exitCode}, signal=${server?.signalCode}`, { cause: error });
+  }
   return { status: response.status, body: await response.json() };
 }
 
@@ -47,8 +52,9 @@ async function findSystemActor(id, players) {
   return null;
 }
 
-async function completeSafeSystemNight(game) {
-  assert.equal((await post(`/api/rooms/${game.id}/night-start`, game.controllerAuth)).status, 200);
+async function completeSafeSystemNight(game, { wolfTarget = 0, publish = true } = {}) {
+  const beforeNight = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+  if (beforeNight.phase !== "NIGHT") assert.equal((await post(`/api/rooms/${game.id}/night-start`, game.controllerAuth)).status, 200);
   while (true) {
     const controllerRoom = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
     if (controllerRoom.systemNight.complete) break;
@@ -56,22 +62,26 @@ async function completeSafeSystemNight(game) {
     assert.ok(actor, `no actor for ${controllerRoom.systemNight.stepId}`);
     const fallbackSeat = actor.room.aliveSeats.find((seat) => seat !== actor.room.assignments[0].seat) || actor.room.aliveSeats[0];
     let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
-    if (actor.step.id === "wolves_kill") payload.skipped = true;
+    if (actor.step.id === "wolves_kill") {
+      if (wolfTarget) payload.targetSeats = [wolfTarget];
+      else payload.skipped = true;
+    }
     else if (actor.step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
     else if (actor.step.targetCount > 0) payload.targetSeats = Array.from({ length: actor.step.targetCount }, (_, index) => actor.room.aliveSeats[(actor.room.aliveSeats.indexOf(fallbackSeat) + index) % actor.room.aliveSeats.length]);
     const acted = await post(`/api/rooms/${game.id}/night-action`, payload);
     assert.equal(acted.status, 200, `${actor.step.id}: ${acted.body.error || "failed"}`);
   }
   assert.equal((await post(`/api/rooms/${game.id}/night-finish`, game.controllerAuth)).status, 200);
-  assert.equal((await post(`/api/rooms/${game.id}/system-publish-daybreak`, game.controllerAuth)).status, 200);
+  if (publish) assert.equal((await post(`/api/rooms/${game.id}/system-publish-daybreak`, game.controllerAuth)).status, 200);
 }
 
 test.before(async () => {
   server = spawn(process.execPath, ["server.js"], {
     cwd: path.join(__dirname, ".."),
     env: { ...process.env, PORT: String(port), HOST: "127.0.0.1", SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS: "0" },
-    stdio: "ignore"
+    stdio: ["ignore", "ignore", "pipe"]
   });
+  server.stderr.on("data", (chunk) => process.stderr.write(chunk));
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       if ((await fetch(baseUrl)).ok) return;
@@ -421,6 +431,51 @@ test("system mode automatically ends after the final wolf is exiled", async () =
   }
 });
 
+test("sheriff self-destruct announces the same wolf's night death before next night", async () => {
+  const game = await createSystemRoom("sheriff-boom-night-death");
+  const wolf = game.views.find((item) => item.room.assignments[0].roleId === "wolf");
+  await completeSafeSystemNight(game, { wolfTarget: wolf.player.seat, publish: false });
+  const boom = await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: wolf.player.clientId });
+  assert.equal(boom.status, 200);
+  assert.equal(boom.body.room.phase, "DAY", "night death must be announced before the next night");
+  const dawn = await post(`/api/rooms/${game.id}/system-publish-daybreak`, game.controllerAuth);
+  assert.equal(dawn.status, 200);
+  assert.match(dawn.body.announcement, new RegExp(`${wolf.player.seat}号`));
+  assert.equal(dawn.body.room.phase, "NIGHT");
+  assert.equal(dawn.body.room.night, 2);
+  assert.equal(dawn.body.room.sheriffElectionDeferredDay, 1);
+  assert.equal(dawn.body.room.deathRecords.filter((record) => record.phase === "DAYBREAK").length, 1);
+});
+
+test("closing sheriff stage makes a later self-destruct a regular daytime event", async () => {
+  const game = await createSystemRoom("sheriff-stage-close");
+  const wolf = game.views.find((item) => item.room.assignments[0].roleId === "wolf");
+  await completeSafeSystemNight(game);
+  assert.equal((await post(`/api/rooms/${game.id}/sheriff-stage-close`, game.controllerAuth)).status, 200);
+  const boom = await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: wolf.player.clientId });
+  assert.equal(boom.status, 200);
+  assert.equal(boom.body.room.phase, "NIGHT");
+  assert.equal(boom.body.room.sheriffElectionDeferredDay, 0);
+});
+
+test("self-destruct cancels an unfinished mobile ballot without exposing partial votes", async () => {
+  const game = await createSystemRoom("boom-cancels-ballot");
+  const wolf = game.views.find((item) => item.room.assignments[0].roleId === "wolf");
+  await completeSafeSystemNight(game);
+  assert.equal((await post(`/api/rooms/${game.id}/sheriff-stage-close`, game.controllerAuth)).status, 200);
+  const opened = await post(`/api/rooms/${game.id}/dark-ballot-open`, { ...game.controllerAuth, round: 1 });
+  assert.equal(opened.status, 200);
+  const ballotId = opened.body.room.activeDarkBallot.id;
+  assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-vote`, { clientId: game.players[0].clientId, ballotId, targetSeat: wolf.player.seat })).status, 200);
+  const boom = await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: wolf.player.clientId });
+  assert.equal(boom.status, 200);
+  assert.equal(boom.body.room.phase, "NIGHT");
+  assert.equal(boom.body.room.activeDarkBallot, null);
+  assert.equal(boom.body.room.dayVoteRecord, null);
+  assert.equal(boom.body.room.abortedBallots, undefined);
+  assert.notEqual((await post(`/api/rooms/${game.id}/dark-ballot-vote`, { clientId: game.players[1].clientId, ballotId, targetSeat: 0 })).status, 200);
+});
+
 test("a system-mode wolf can self-destruct and immediately end the day", async () => {
   const game = await createSystemRoom("wolf-self-destruct");
   const wolf = game.views.find((item) => item.room.assignments[0].roleId === "wolf");
@@ -449,10 +504,49 @@ test("a system-mode wolf can self-destruct and immediately end the day", async (
   assert.equal(exploded.status, 200);
   assert.equal(exploded.body.room.phase, "NIGHT");
   assert.equal(exploded.body.room.night, 2);
+  assert.equal(exploded.body.room.sheriffElectionDeferredDay, 1);
+  assert.equal(exploded.body.room.sheriffElectionDone, false, "the next day must reopen as the delayed election");
   assert.equal(exploded.body.room.publicReveals.some((item) => item.seat === wolf.room.assignments[0].seat), false);
   assert.match(exploded.body.room.latestPublicAnnouncement.text, /自爆/);
   const observer = await getRoom(game.id, "self-destruct-observer");
   assert.equal(observer.aliveSeats.includes(wolf.room.assignments[0].seat), false);
+
+  await completeSafeSystemNight(game);
+  const delayedElection = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+  assert.equal(delayedElection.phase, "DAY");
+  assert.equal(delayedElection.night, 2);
+  assert.equal(delayedElection.sheriffElectionDone, false);
+  const secondWolf = game.views.find((item) => item.room.assignments[0].roleId === "wolf" && item.room.assignments[0].seat !== wolf.room.assignments[0].seat);
+  assert.ok(secondWolf);
+  const livingSeat = delayedElection.aliveSeats.find((seat) => seat !== secondWolf.room.assignments[0].seat);
+  assert.equal((await post(`/api/rooms/${game.id}/sheriff-candidates`, { ...game.controllerAuth, seats: [livingSeat] })).status, 200);
+  const repeatedBoom = await post(`/api/rooms/${game.id}/wolf-self-destruct`, { clientId: secondWolf.player.clientId });
+  assert.equal(repeatedBoom.status, 200);
+  assert.equal(repeatedBoom.body.room.phase, "NIGHT");
+  assert.equal(repeatedBoom.body.room.night, 3);
+  assert.deepEqual(repeatedBoom.body.room.sheriffBadge, { holderSeat: 0, lost: true });
+});
+
+test("system optional death-skill windows time out after five seconds and any seated device can continue", async () => {
+  const game = await createSystemRoom("system-skill-window");
+  const hunter = game.views.find((item) => item.room.assignments[0].roleId === "hunter");
+  const player = game.players.find((item) => item.seat !== hunter.room.assignments[0].seat);
+  assert.ok(hunter);
+  await completeSafeSystemNight(game, { wolfTarget: hunter.room.assignments[0].seat });
+  const hunterAfterDeath = await getRoom(game.id, hunter.player.clientId);
+  assert.equal(hunterAfterDeath.myDeathSkill.seat, hunter.room.assignments[0].seat);
+  assert.ok(hunterAfterDeath.myDeathSkill.deadlineAt >= Date.now() + 4500);
+  const waitMs = Math.max(0, hunterAfterDeath.myDeathSkill.deadlineAt - Date.now() + 30);
+  await new Promise((resolve) => setTimeout(resolve, waitMs));
+  const timedOut = await post(`/api/rooms/${game.id}/system-skill-timeout`, { clientId: player.clientId });
+  assert.equal(timedOut.status, 200);
+  assert.equal((await getRoom(game.id, hunter.player.clientId)).myDeathSkill, null);
+  const controllerRoom = await getRoom(game.id, game.controllerId, game.controllerAuth.judgeToken);
+  assert.equal(controllerRoom.pendingDeathSkills.length, 0);
+  assert.equal((await post(`/api/rooms/${game.id}/exile-record`, { ...game.controllerAuth, noExile: true })).status, 200);
+  const nextNight = await post(`/api/rooms/${game.id}/night-start`, { clientId: player.clientId });
+  assert.equal(nextNight.status, 200);
+  assert.equal(nextNight.body.room.night, 2);
 });
 
 test("system controller transfer rotates authority and only permits the old controller to take a seat before dealing", async () => {
@@ -509,21 +603,54 @@ test("system controller transfer locks after five invalid codes and a new code r
   assert.equal(claimed.status, 200);
 });
 
-test("stale remote mutations are rejected before they can overwrite the first valid write", async () => {
+test("concurrent seat reservations accept distinct seats while stale game mutations remain protected", async () => {
+  const suffix = Date.now();
+  const controllerId = `revision-controller-${suffix}`;
   const created = await post("/api/rooms", {
-    clientId: `revision-controller-${Date.now()}`,
+    clientId: controllerId,
     mode: "SYSTEM",
     boardId: "pre_witch_hunter_idiot_mixed"
   });
   const id = created.body.room.id;
   const revision = created.body.room.revision;
-  const first = await post(`/api/rooms/${id}/seat`, { clientId: `revision-a-${Date.now()}`, seat: 1, expectedRevision: revision });
-  const second = await post(`/api/rooms/${id}/seat`, { clientId: `revision-b-${Date.now()}`, seat: 2, expectedRevision: revision });
-  assert.equal(first.status, 200);
-  assert.equal(second.status, 409);
+  const reservations = await Promise.all(Array.from({ length: 12 }, (_, index) => post(`/api/rooms/${id}/seat`, {
+    clientId: `revision-player-${suffix}-${index + 1}`,
+    seat: index + 1,
+    expectedRevision: revision
+  })));
+  assert.ok(reservations.every((result) => result.status === 200));
+
   const observer = await getRoom(id, "revision-observer");
-  assert.equal(observer.seats.find((seat) => seat.seat === 1).occupied, true);
-  assert.equal(observer.seats.find((seat) => seat.seat === 2).occupied, false);
+  assert.equal(observer.seats.filter((seat) => seat.occupied).length, 12);
+  const staleDeal = await post(`/api/rooms/${id}/deal`, {
+    clientId: controllerId,
+    judgeToken: created.body.judgeToken,
+    expectedRevision: revision
+  });
+  assert.equal(staleDeal.status, 409);
+  assert.equal((await getRoom(id, "revision-observer")).phase, "WAITING");
+});
+
+test("simultaneous requests for one seat reserve it once and refresh the losing client", async () => {
+  const suffix = Date.now();
+  const created = await post("/api/rooms", {
+    clientId: `same-seat-controller-${suffix}`,
+    mode: "SYSTEM",
+    boardId: "pre_witch_hunter_idiot_mixed"
+  });
+  const id = created.body.room.id;
+  const revision = created.body.room.revision;
+  const reservations = await Promise.all(["a", "b"].map((player) => post(`/api/rooms/${id}/seat`, {
+    clientId: `same-seat-${suffix}-${player}`,
+    seat: 7,
+    expectedRevision: revision
+  })));
+  assert.deepEqual(reservations.map((result) => result.status).sort(), [200, 409]);
+  assert.match(reservations.find((result) => result.status === 409).body.error, /刚被其他玩家选中/);
+
+  const observer = await getRoom(id, "same-seat-observer");
+  assert.equal(observer.seats.filter((seat) => seat.occupied).length, 1);
+  assert.equal(observer.seats.find((seat) => seat.seat === 7).occupied, true);
 });
 
 test("system timeout is optional, starts with the actionable step, and cannot be skipped early", async () => {
@@ -543,6 +670,46 @@ test("system timeout is optional, starts with the actionable step, and cannot be
   assert.equal(started.body.room.systemNight.timeout.seconds, 60);
   assert.ok(started.body.room.systemNight.timeout.deadlineAt > Date.now());
   assert.equal((await post(`/api/rooms/${id}/system-timeout-skip`, controllerAuth)).status, 400);
+});
+
+test("ordinary system boards support online ballots with public vote records and offline choice", async () => {
+  const game = await createSystemRoom("ordinary-online-ballot");
+  const villager = game.views.find((item) => item.room.assignments[0].roleId === "villager");
+  assert.ok(villager);
+  await completeSafeSystemNight(game);
+  const opened = await post(`/api/rooms/${game.id}/dark-ballot-open`, { ...game.controllerAuth, round: 1 });
+  assert.equal(opened.status, 200);
+  assert.equal((await post(`/api/rooms/${game.id}/exile-record`, { ...game.controllerAuth, noExile: true })).status, 400);
+  for (const player of game.players) {
+    const targetSeat = player.seat === 1 ? 0 : villager.player.seat;
+    assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-vote`, { clientId: player.clientId, targetSeat })).status, 200);
+  }
+  assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-vote`, { clientId: game.players[0].clientId, targetSeat: villager.player.seat })).status, 409);
+  const closed = await post(`/api/rooms/${game.id}/dark-ballot-close`, game.controllerAuth);
+  assert.equal(closed.status, 200);
+  const view = await getRoom(game.id, game.players[0].clientId);
+  assert.equal(view.dayVoteRecord.votes.length, 12);
+  assert.equal(view.dayVoteRecord.votes.find((vote) => vote.voterSeat === 1).targetSeat, 0);
+  assert.equal(view.dayVoteRecord.exiledSeat, villager.player.seat);
+});
+
+test("online voting opens the Order Prince window and supports online revote", async () => {
+  const game = await createSystemRoom("prince-online-ballot", "realm_of_trickery");
+  const prince = game.views.find((item) => item.room.assignments[0].roleId === "order_prince");
+  const villager = game.views.find((item) => item.room.assignments[0].roleId === "villager");
+  await completeSafeSystemNight(game);
+  assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-open`, { ...game.controllerAuth, round: 1 })).status, 200);
+  for (const player of game.players) assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-vote`, { clientId: player.clientId, targetSeat: villager.player.seat })).status, 200);
+  const first = await post(`/api/rooms/${game.id}/dark-ballot-close`, game.controllerAuth);
+  assert.equal(first.status, 200);
+  assert.ok(first.body.room.pendingExileResult);
+  assert.equal((await post(`/api/rooms/${game.id}/order-prince-activate`, { clientId: prince.player.clientId })).status, 200);
+  assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-open`, { ...game.controllerAuth, round: 1 })).status, 200);
+  for (const player of game.players) assert.equal((await post(`/api/rooms/${game.id}/dark-ballot-vote`, { clientId: player.clientId, targetSeat: 0 })).status, 200);
+  const revote = await post(`/api/rooms/${game.id}/dark-ballot-close`, game.controllerAuth);
+  assert.equal(revote.status, 200);
+  assert.equal(revote.body.room.dayVoteRecord.noExile, true);
+  assert.equal(revote.body.room.orderPrinceRevotePending, false);
 });
 
 test("system-mode Order Prince may privately trigger the controller's offline revote", async () => {
@@ -574,7 +741,7 @@ test("all complex boards can complete two system-guided nights", async () => {
   const expectedSecondNightSteps = {
     masquerade: ["dancer_dance", "mask_check", "mask_give"],
     treasure_master: ["treasure_pick", "treasure_skill", "wolves_kill"],
-    mechanical_wolf_spirit_medium: ["mechanical_guard", "mechanical_mimic"],
+    mechanical_wolf_spirit_medium: ["mechanical_knife_confirm", "mechanical_guard", "mechanical_mimic"],
     realm_of_trickery: ["magician_swap", "trickster_swap"],
     dawn_voyage: ["siren_wind", "captain_board"],
     wolf_king_guard: [],
@@ -613,12 +780,19 @@ test("all complex boards can complete two system-guided nights", async () => {
         assert.ok(actor, `${boardId}: no acting player for ${controllerRoom.systemNight.stepId}`);
         const step = actor.room.currentNightSteps[0];
         stepIds.push(step.id);
+        if (step.id === "mechanical_knife_confirm") {
+          assert.equal(actor.room.systemNight.privateContext.mechanicalKnifeState, "NO");
+          const controllerView = await getRoom(id, controllerId, token);
+          assert.equal(controllerView.systemNight.privateContext.mechanicalKnifeState, undefined);
+        }
         if (boardId === "wolf_king_guard" && step.id === "wolves_kill") {
           const wolfKing = roleViews.find((item) => item.room.assignments[0].roleId === "wolf_king");
           assert.ok(wolfKing);
           assert.equal((await getRoom(id, wolfKing.player.clientId)).systemNight.canAct, true, "wolf king must be able to submit the shared kill");
         }
-        const candidates = (step.allowedSeats?.length ? step.allowedSeats : actor.room.aliveSeats).filter(Boolean);
+        const actorSeat = actor.room.assignments[0].seat;
+        const candidates = (step.allowedSeats?.length ? step.allowedSeats : actor.room.aliveSeats)
+          .filter((seat) => Boolean(seat) && (step.id !== "dreamer_dream" || seat !== actorSeat));
         let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
         if (step.id === "wolves_kill") payload.skipped = true;
         else if (step.id === "poisoner_poison" && boardId === "treasure_master" && nightNumber === 1) payload.targetSeats = [candidates[0]];
@@ -632,7 +806,7 @@ test("all complex boards can complete two system-guided nights", async () => {
           const card = actor.room.systemNight.privateContext.treasureCardRoleId;
           const requiredTarget = ["spirit_medium", "dreamer"].includes(card);
           payload.skipped = !requiredTarget;
-          payload.targetSeats = requiredTarget ? [candidates[0]] : [];
+          payload.targetSeats = requiredTarget ? [card === "dreamer" ? candidates.find((seat) => seat !== actorSeat) : candidates[0]] : [];
         } else if (step.id === "mechanical_mimic" && nightNumber === 1) payload.targetSeats = [roleSeat("guard")];
         else if (step.id === "dancer_dance") {
           danceSeats = goodSeats.filter((seat) => candidates.includes(seat)).slice(0, 3);
@@ -651,7 +825,9 @@ test("all complex boards can complete two system-guided nights", async () => {
     const firstNightSteps = await runNight(1);
     if (boardId === "follow_neighbor") assert.ok(firstNightSteps.includes("puppet_select"));
     // 盗宝牌会随机抽走一张神职；仅在场上确有毒师时才会出现该步骤。
-    assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...controllerAuth, noExile: true, seat: 0 })).status, 200);
+    const recordedExile = await post(`/api/rooms/${id}/exile-record`, { ...controllerAuth, noExile: true, seat: 0 });
+    assert.equal(recordedExile.status, 200);
+    if (recordedExile.body.room.pendingExileResult) assert.equal((await post(`/api/rooms/${id}/order-prince-decline`, controllerAuth)).status, 200);
     const secondNightSteps = await runNight(2);
     expectedSecondNightSteps[boardId].forEach((stepId) => assert.ok(secondNightSteps.includes(stepId), `${boardId} missing ${stepId}`));
     if (boardId === "treasure_master" && firstNightSteps.includes("poisoner_poison")) assert.equal(secondNightSteps.includes("poisoner_poison"), false);

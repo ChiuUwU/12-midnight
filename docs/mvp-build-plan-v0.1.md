@@ -1,5 +1,7 @@
 # 十二点天黑 MVP 开发清单 v0.1
 
+> 文档定位：历史 MVP 清单，不是当前待办或已实现证明；现阶段需求和优先事项请参照 [PRD](./product-requirements.md) 与 [当前状态](./current-status.md)。
+
 > 历史 MVP 规划。本文保留用于追溯开发顺序，当前完成范围、待验收事项和发布基线请查看 [`current-status.md`](./current-status.md)。
 
 ## 1. MVP 原则

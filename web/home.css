@@ -1,0 +1,121 @@
+/* Homepage-only theme. Room, identity and judge views retain styles.css unchanged. */
+@font-face {
+  font-family: "Last Night Title";
+  src: url('./assets/fonts/last-night-title.woff') format('woff');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+4E00, U+540E, U+591C, U+6700;
+}
+body.home-theme { background: #09141d; }
+#app.home-root, #app.home-related {
+  --home-ink: #f6edda;
+  --home-muted: #c4c8c4;
+  --home-gold: #dbc18a;
+  --home-line: rgba(220, 193, 136, .36);
+  --home-space: 8px;
+  --home-title-font: "Songti SC", SimSun, "Noto Serif SC", serif;
+  --home-body-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+  width: min(100%, 480px);
+  margin: 0 auto;
+  color: var(--home-ink);
+  font: 16px/1.7 var(--home-body-font);
+  color-scheme: dark;
+}
+#app.home-root { padding: 0; }
+.home-root button, .home-related button, .home-related input, .home-related select { font-family: var(--home-body-font); }
+.home-root button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.home-root button:focus-visible, .home-related button:focus-visible, .home-related input:focus-visible, .home-related select:focus-visible, .home-related a:focus-visible { outline: 2px solid #f3d69a; outline-offset: 4px; }
+.landing-scene { position: relative; isolation: isolate; min-height: max(860px, 100svh); overflow: hidden; }
+.landing-scene.has-resume .landing-intro { top: 176px; }
+.landing-ambience, .landing-art, .landing-shade { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: -1; }
+.landing-ambience { background: #0b1722 url('./assets/home-moonlit-council-20261101.png') center/cover no-repeat; filter: blur(22px); transform: scale(1.06); opacity: .58; }
+.landing-art { top: 50%; bottom: auto; height: auto; transform: translateY(-50%); mask-image: linear-gradient(180deg, transparent, #000 10%, #000 78%, transparent); -webkit-mask-image: linear-gradient(180deg, transparent, #000 10%, #000 78%, transparent); }
+.landing-shade { background: linear-gradient(180deg, rgba(4,12,21,.28), rgba(4,12,21,.04) 42%, transparent 66%, rgba(4,11,18,.5) 80%, #07121be6 100%); }
+.landing-masthead { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px; padding: max(16px, env(safe-area-inset-top)) 24px 0; }
+.landing-wordmark { display: flex; align-items: center; gap: 8px; font: bold 14px Georgia, serif; letter-spacing: 1px; color: #ead7ac; white-space: nowrap; }
+.landing-wordmark > span { font-size: 30px; font-weight: normal; line-height: 1; }
+.landing-text-button { min-height: 44px; padding: 8px 0; border: 0; background: none; color: #e3decf; font-size: 16px; line-height: 1.5; font-weight: 500; letter-spacing: 1px; }
+.landing-masthead .landing-text-button { font-size: 14px; }
+.landing-text-button > span { color: var(--home-gold); margin-left: 4px; }
+.landing-intro { position: absolute; top: clamp(108px, 13svh, 160px); left: 16px; right: 16px; text-align: center; text-shadow: 0 3px 20px #030b16; }
+.landing-season { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 0 0 16px; color: #e3cf9f; font-size: 16px; font-weight: 700; line-height: 1.5; letter-spacing: 2px; }
+.landing-season > span { font: 700 16px Georgia, serif; letter-spacing: 1px; }
+.landing-season > i { width: 1px; height: 16px; background: var(--home-line); }
+#landing-title { margin: -10px -10px 4px; padding: 0; font: 700 clamp(48px, 14vw, 66px)/1.3 "Last Night Title", var(--home-title-font); letter-spacing: .12em; color: #f7e1ac; }
+.landing-title-art { display: block; width: 100%; height: auto; aspect-ratio: 4480 / 1420; max-height: 150px; object-fit: contain; }
+.landing-english { margin: 0; color: #e9d6af; font: 14px/1.5 Georgia, serif; letter-spacing: 5px; }
+.landing-ornament { display: flex; align-items: center; justify-content: center; gap: 12px; margin: 16px 0 8px; color: #d4b570; font-size: 20px; line-height: 1; }
+.landing-ornament > span { width: 48px; height: 1px; background: linear-gradient(90deg, transparent, #c7a66d); }
+.landing-ornament > span:last-child { transform: rotate(180deg); }
+.landing-tagline { margin: 0; color: #e7e4d9; font-size: 16px; letter-spacing: 2px; }
+.landing-entry { position: absolute; bottom: max(80px, calc(64px + env(safe-area-inset-bottom))); left: 24px; right: 24px; text-align: center; }
+.landing-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.landing-action { display: flex; align-items: center; justify-content: center; gap: 12px; min-height: 60px; padding: 12px 8px; border: 0; border-radius: 3px; background: none; color: #f2ddb2; font-size: 22px; font-weight: 600; font-family: var(--home-title-font); letter-spacing: 2px; line-height: 1.4; text-shadow: 0 -1px 0 #fff5d0a6, 0 1px 0 #97703b, 0 2px 0 #412c17, 0 3px 4px #020810, 0 0 10px #020810, 0 0 20px #020810; transition: transform .15s, filter .15s; }
+.home-root .landing-action { font-family: var(--home-title-font); }
+.landing-action.is-primary { color: #ffe6a9; }
+.landing-action > span:last-child { font-size: 22px; font-weight: 400; opacity: .8; }
+.landing-action:hover { transform: translateY(-2px); filter: brightness(1.08); }
+.landing-navigation { display: flex; align-items: center; justify-content: center; gap: 24px; margin-top: 16px; }
+.landing-navigation .landing-text-button, .landing-masthead .landing-text-button { text-shadow: 0 -1px 0 #fff5d04d, 0 1px 0 #77562d, 0 3px 5px #020810, 0 0 10px #020810; }
+.landing-resume { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; margin-top: 0; padding: 8px 16px; border: 0; border-radius: 3px; background: none; color: var(--home-ink); text-align: left; text-shadow: 0 1px 0 #77562d, 0 3px 5px #020810, 0 0 10px #020810; }
+.landing-resume small, .landing-resume strong { display: block; }
+.landing-resume small { font-size: 14px; color: #d2bc90; }
+.landing-resume strong { font-size: 16px; font-weight: 500; line-height: 1.7; overflow-wrap: anywhere; }
+.landing-panel { width: min(452px, calc(100% - 32px)); max-height: 85svh; margin: auto; padding: 24px; background: linear-gradient(145deg, #112432fa, #091822fc); color: var(--home-ink); border: 1px solid var(--home-line); border-radius: 8px; box-shadow: 0 24px 100px #000a; font: 16px/1.7 var(--home-body-font); }
+.landing-panel::backdrop { background: #030b15b8; backdrop-filter: blur(7px); }
+.landing-panel-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.landing-kicker { margin: 0 0 8px; font: 14px/1.4 Georgia, serif; color: #d5bc88; letter-spacing: 2px; }
+.landing-panel h2 { margin: 0; font: 500 28px/1.4 var(--home-title-font); letter-spacing: 2px; }
+.landing-close { flex: 0 0 auto; width: 44px; height: 44px; border: 1px solid var(--home-line); border-radius: 50%; background: none; color: #e2cc9d; font-size: 28px; line-height: 1; }
+.landing-panel-note { margin: 16px 0; color: var(--home-muted); font-size: 16px; }
+.landing-board { display: grid; grid-template-columns: 24px minmax(0, 1fr) 12px; align-items: center; gap: 12px; width: 100%; padding: 16px 0; border: 0; border-top: 1px solid #c7ad7333; background: none; color: var(--home-ink); text-align: left; }
+.landing-board:hover { background: #c7ad7310; }
+.landing-board-index, .landing-board > span:last-child { color: #d4b77f; font: 14px Georgia, serif; }
+.landing-board strong, .landing-board small { display: block; }
+.landing-board strong { font-size: 18px; font-weight: 500; }
+.landing-board small { margin-top: 8px; color: var(--home-muted); font-size: 14px; line-height: 1.8; }
+/* Related entry pages only. Do not apply this palette to rulebooks opened in a room. */
+#app.home-related { position: relative; isolation: isolate; min-height: 100svh; padding: 24px 24px calc(32px + env(safe-area-inset-bottom)); --panel: #0d202eea; --ink: #f6edda; --muted: #c4c8c4; --line: #c7ad7359; --soft: #173040; --gold: #dbc18a; }
+#app.home-related::before { content: ""; position: fixed; inset: 0; width: min(100%, 480px); margin: auto; z-index: -1; background: linear-gradient(#07121bcf, #07121bf0), url('./assets/home-moonlit-council-20261101.png') center/cover no-repeat; pointer-events: none; }
+.home-related .page-title { margin: 16px 0 8px; color: var(--home-ink); font: 500 32px/1.4 var(--home-title-font); letter-spacing: 2px; }
+.home-related .page-subtitle { margin: 0 0 24px; color: var(--home-muted); font-size: 16px; line-height: 1.8; }
+.home-related .panel { margin-top: 16px; padding: 24px; border-radius: 8px; }
+.home-related .stack { gap: 24px; }
+.home-related .label { color: #d9c394; font-size: 16px; }
+.home-related .field { gap: 8px; }
+.home-related .body-text { color: #eadbc1; font-size: 16px; line-height: 1.8; }
+.home-related .input, .home-related .select { min-height: 52px; padding: 12px; border: 1px solid #c7ad7380; border-radius: 3px; background: #091722; color: var(--home-ink); font-size: 16px; }
+.home-related .input::placeholder { color: #b3bdc0; }
+.home-related .segmented { gap: 8px; }
+.home-related .segment { min-height: 52px; border: 1px solid #c7ad7366; border-radius: 3px; background: #112634; color: #e1ddcf; font-size: 16px; font-weight: 500; }
+.home-related .segment.active { border-color: #d8bc85; background: #ddc18c; color: #15212b; }
+.home-related .button { min-height: 52px; margin-top: 16px; padding: 12px 16px; border: 1px solid var(--home-line); border-radius: 3px; background: #102838c4; color: #ecdfc2; font-size: 18px; line-height: 1.5; font-weight: 500; }
+.home-related .button.primary { border-color: #d8bc85; background: linear-gradient(110deg, #ead8ae, #c7a56a); color: #15212b; font-weight: 600; }
+.home-related .notice { padding: 12px; color: #cbd0cc; border-color: var(--home-line); background: #1630428c; font-size: 14px; line-height: 1.8; }
+.home-related .rulebook-toolbar { background: #0c1d2ef5; gap: 8px; }
+.home-related .rulebook-toolbar .button { margin: 0; min-height: 44px; padding: 8px 12px; font-size: 16px; }
+.home-related .rulebook-hero { background: #112735c9; border-color: var(--home-line); border-radius: 8px; padding: 24px; }
+.home-related .rulebook-location { color: var(--home-muted); font-size: 14px; }
+.home-related .rulebook-chapters { gap: 8px; }
+.home-related .rulebook-chapters a { color: #f1dfbb; font-size: 14px; border-color: var(--home-line); border-radius: 3px; }
+.home-related .rulebook-content { font-size: 16px; line-height: 1.9; }
+.home-related .rulebook-content h2 { color: #ecd5a5; font-size: 24px; }
+.home-related .rulebook-content h3 { color: #e5c38d; font-size: 20px; }
+.home-related .rulebook-content h4 { font-size: 18px; }
+.home-related .rulebook-content strong { color: #f1dfbb; }
+.home-related .rulebook-content .rules-note { color: #e2c99c; font-size: 16px; }
+.home-related .rulebook-content .rules-table-wrap th { color: #f1dfbb; }
+.home-related .rulebook-content .rules-table-wrap tr:nth-child(2n) { background: #17304066; }
+@media (max-width: 359px) {
+  .landing-masthead { padding-left: 16px; padding-right: 16px; }
+  .landing-wordmark { font-size: 12px; }
+  .landing-entry { left: 16px; right: 16px; }
+  .landing-actions { gap: 8px; }
+  .landing-action { padding: 12px 4px; font-size: 20px; letter-spacing: 1px; gap: 8px; }
+  .landing-navigation { gap: 16px; }
+  .landing-panel { padding: 16px; }
+  #app.home-related { padding-left: 16px; padding-right: 16px; }
+  .home-related .panel, .home-related .rulebook-hero { padding: 16px; }
+}
+@media (prefers-reduced-motion: reduce) { .home-root button { transition: none; } }

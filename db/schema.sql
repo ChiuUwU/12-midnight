@@ -26,3 +26,22 @@ CREATE TABLE IF NOT EXISTS game_results (
 
 CREATE INDEX IF NOT EXISTS idx_game_results_room_id ON game_results(room_id);
 CREATE INDEX IF NOT EXISTS idx_game_results_created_at ON game_results(created_at);
+
+CREATE TABLE IF NOT EXISTS game_archives (
+  id TEXT PRIMARY KEY,
+  room_id TEXT NOT NULL,
+  board_id TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  phase TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  data TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_game_archives_updated_at ON game_archives(updated_at);
+
+CREATE TABLE IF NOT EXISTS admin_login_attempts (
+  id TEXT PRIMARY KEY,
+  window_started_at INTEGER NOT NULL,
+  attempts INTEGER NOT NULL
+);

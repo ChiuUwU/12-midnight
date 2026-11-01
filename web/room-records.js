@@ -89,6 +89,7 @@
       resume,
       metadata,
       status: "OPEN",
+      deadlineAt: room.mode === "SYSTEM" ? Date.now() + 5000 : 0,
       createdAt: Date.now()
     };
     room.activeDaySkillWindow = window;

@@ -8,6 +8,9 @@ const { getBoard } = require("./miniprogram/data/boards");
 const { createBalancedDeal } = require("./web/balanced-deal");
 const targetMapping = require("./web/target-mapping");
 const roomRecords = require("./web/room-records");
+const wolfKnifePolicy = require("./web/wolf-knife-policy");
+const fixedNight = require("./web/fixed-night-flow");
+const dayVoice = require("./web/day-skill-voice");
 const { calculateNightResolution, getDeathSkillResolution, getGameOutcome } = require("./web/night-resolution");
 const { resolveNightTarget, syncNightTargetResolutions } = targetMapping;
 const { recordPrivateEvent, privateEventsForViewer, createDeathRecord, publicDeathRecord, openDaySkillWindow, resolveDaySkillWindow, daySkillWindowForViewer } = roomRecords;
@@ -71,6 +74,54 @@ function hasUsedNightStep(room, stepId) {
   return (room && room.nightActions || []).some((action) => action.stepId === stepId && !action.skipped);
 }
 
+function isDarkDestruction(room) {
+  return room?.boardId === "dark_destruction_2";
+}
+
+function darkRoleSeat(room, roleId) {
+  return (room?.assignments || []).find((assignment) => assignment.roleId === roleId)?.seat || 0;
+}
+
+function darkBindingTarget(room, night = room?.night) {
+  const action = (room?.nightActions || []).find((item) => item.night === night && item.stepId === "lilith_bind" && !item.skipped);
+  return Number(action?.targetSeats?.[0] || 0);
+}
+
+function isDarkRoleBound(room, roleId, night = room?.night) {
+  const seat = darkRoleSeat(room, roleId);
+  return Boolean(seat && darkBindingTarget(room, night) === seat);
+}
+
+function hasUsedArchangelBless(room) {
+  return (room?.nightActions || []).some((action) => action.stepId === "archangel_bless" && !action.skipped);
+}
+
+function archangelReviveDisabled(room) {
+  const archangelSeat = darkRoleSeat(room, "archangel");
+  return Boolean(archangelSeat && (room?.nightActions || []).some((action) =>
+    action.stepId === "lilith_bind" && Number(action.targetSeats?.[0]) === Number(archangelSeat)
+  ));
+}
+
+function canOfferArchangelRevive(room, targetSeat) {
+  const archangel = (room?.assignments || []).find((assignment) => assignment.roleId === "archangel");
+  return Boolean(isDarkDestruction(room)
+    && targetSeat
+    && archangel
+    && archangel.alive !== false
+    && Number(archangel.seat) !== Number(targetSeat)
+    && !room.archangelReviveUsed
+    && !archangelReviveDisabled(room));
+}
+
+function hasSuccessfulLiaCharge(room) {
+  return (room?.nightActions || []).some((action) => action.stepId === "lia_charge" && action.success === true);
+}
+
+function hasUsedLiaFog(room) {
+  return (room?.nightActions || []).some((action) => action.stepId === "lia_fog" && !action.skipped);
+}
+
 function hasUsedWitchAntidote(room) {
   return (room && room.nightActions || []).some((action) =>
     (action.stepId === "witch_antidote" && !action.skipped) ||
@@ -88,7 +139,7 @@ function hasUsedWitchPoison(room) {
 function createWitchStep(room) {
   const antidoteAvailable = !hasUsedWitchAntidote(room);
   const poisonAvailable = !hasUsedWitchPoison(room);
-  if (!antidoteAvailable && !poisonAvailable) return null;
+  if (!antidoteAvailable && !poisonAvailable && !fixedNight.enabled(room)) return null;
   return { id: "witch_action", actor: "witch", label: "女巫行动", targetCount: 0, allowSkip: false, antidoteAvailable, poisonAvailable, singlePotionPerNight: true };
 }
 
@@ -194,12 +245,15 @@ function mechanicalSkillStep(room, night) {
 function shouldIncludeNightStep(room, step) {
   const assignments = room && room.assignments || [];
   if (!assignments.length || step.actor === "system") return true;
-  if (step.id === "poisoner_poison" && hasUsedNightStep(room, "poisoner_poison")) return false;
-  if (step.actor === "wolf_team") {
-    const extraMembers = room.boardId === "realm_of_trickery" ? ["trickster"] : room.boardId === "dawn_voyage" ? ["siren"] : [];
-    const ordinaryWolfAlive = assignments.some((assignment) => assignment.alive !== false && assignment.roleId === "wolf");
-    return assignments.some((assignment) => assignment.alive !== false && (["wolf", "wolf_king", ...extraMembers].includes(assignment.roleId) || (!ordinaryWolfAlive && assignment.roleId === "mechanical_wolf")));
+  if (room.mode === "JUDGE" && isDarkDestruction(room) && ["lilith_bind", "lia_fog"].includes(step.id)) return true;
+  if (step.actor === "wolf_team") return wolfKnifePolicy.hasKnifeActor(room.boardId, assignments);
+  if (isDarkDestruction(room)) {
+    if (step.id !== "lilith_bind" && step.id !== "lia_raise" && step.id !== "dreamer_dream" && step.actor !== "wolf_team" && isDarkRoleBound(room, step.actor)) return false;
+    if (step.id === "lia_charge" && hasSuccessfulLiaCharge(room)) return false;
+    if (step.id === "lia_fog" && (!hasSuccessfulLiaCharge(room) || hasUsedLiaFog(room))) return false;
+    if (step.id === "archangel_bless" && hasUsedArchangelBless(room)) return false;
   }
+  if (step.id === "poisoner_poison" && hasUsedNightStep(room, "poisoner_poison")) return false;
   return assignments.some((assignment) => assignment.alive !== false && assignment.roleId === step.actor);
 }
 
@@ -230,6 +284,22 @@ function createNightSteps(boardId, night, room = null) {
     common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人和狼王选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) common.push(witchStep);
     common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
+  } else if (boardId === "dark_destruction_2") {
+    const witchStep = createWitchStep(room);
+    const lilithInactive = room?.mode === "JUDGE" && (room.assignments || []).some((item) => item.roleId === "lilith" && item.alive === false);
+    common.push({ id: "lilith_bind", actor: "lilith", label: "莉莉丝选择禁锢目标", targetCount: 1, allowSkip: Boolean(lilithInactive), inactive: Boolean(lilithInactive) });
+    if (firstNight) common.push({ id: "lia_raise", actor: "lia", label: "莉娅举手确认身份", targetCount: 0, allowSkip: false });
+    common.push(
+      { id: "dreamer_dream", actor: "dreamer", label: "摄梦人选择梦游者", targetCount: 1, allowSkip: false },
+      { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true }
+    );
+    if (witchStep) common.push(witchStep);
+    if (!hasUsedArchangelBless(room)) common.push({ id: "archangel_bless", actor: "archangel", label: "天使长选择是否祝福", targetCount: 1, allowSkip: true });
+    common.push({ id: "cain_check", actor: "cain", label: "凯恩鉴定两名玩家的身份关系", targetCount: 2, allowSkip: false });
+    if (!hasSuccessfulLiaCharge(room)) {
+      common.push({ id: "lia_charge", actor: "lia", label: "莉娅选择充能目标", targetCount: 1, allowSkip: false });
+    }
+    if (room?.mode === "JUDGE" || (hasSuccessfulLiaCharge(room) && !hasUsedLiaFog(room))) common.push({ id: "lia_fog", actor: "lia", label: "莉娅选择是否开启迷雾", targetCount: 0, allowSkip: true });
   } else if (boardId === "wolf_king_guard") {
     const witchStep = createWitchStep(room);
     common.push(
@@ -285,6 +355,7 @@ function createNightSteps(boardId, night, room = null) {
     }
   } else if (boardId === "mechanical_wolf_spirit_medium") {
     const witchStep = createWitchStep(room);
+    if (!firstNight && room?.mode === "SYSTEM") common.push({ id: "mechanical_knife_confirm", actor: "mechanical_wolf", label: "机械狼确认带刀状态", targetCount: 0, allowSkip: false });
     common.push(
       { id: "guard_guard", actor: "guard", label: "守卫选择守护目标", targetCount: 1, allowSkip: true },
       { id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true }
@@ -293,6 +364,7 @@ function createNightSteps(boardId, night, room = null) {
     if (!firstNight) {
       const skillStep = mechanicalSkillStep(room, night);
       if (skillStep) common.push(skillStep);
+      else if (fixedNight.enabled(room)) common.push({ id: "mechanical_skill_wait", actor: "mechanical_wolf", label: "机械狼技能夜", targetCount: 0, allowSkip: true, inactive: true });
     }
     common.push(
       { id: "mechanical_mimic", actor: "mechanical_wolf", label: "机械狼选择模仿目标", targetCount: 1, allowSkip: false },
@@ -304,7 +376,9 @@ function createNightSteps(boardId, night, room = null) {
     const magicianSeats = getAvailableSwapSeats(room, "magician_swap");
     const witchStep = createWitchStep(room);
     if (tricksterSeats.length >= 2) common.push({ id: "trickster_swap", actor: "trickster", label: "诡术师交换两个号码", targetCount: 2, allowSkip: !didSkipPreviousNight(room, "trickster_swap", night), allowedSeats: tricksterSeats });
+    else if (fixedNight.enabled(room)) common.push({ id: "trickster_swap", actor: "trickster", label: "诡术师交换两个号码", targetCount: 0, inactive: true });
     if (magicianSeats.length >= 2) common.push({ id: "magician_swap", actor: "magician", label: "魔术师交换两个号码", targetCount: 2, allowSkip: true, allowedSeats: magicianSeats, targetMapping: { id: "magician_swap", kind: "SWAP", appliesTo: ["wolves_kill", "witch_antidote", "witch_poison", "seer_check"], order: 100 } });
+    else if (fixedNight.enabled(room)) common.push({ id: "magician_swap", actor: "magician", label: "魔术师交换两个号码", targetCount: 0, inactive: true });
     common.push({ id: "wolves_kill", actor: "wolf_team", label: "狼人选择击杀目标", targetCount: 1, allowSkip: true });
     if (witchStep) common.push(witchStep);
     common.push({ id: "seer_check", actor: "seer", label: "预言家查验目标", targetCount: 1, allowSkip: false });
@@ -334,7 +408,72 @@ function createNightSteps(boardId, night, room = null) {
       common.push({ id: "idiot_confirm", actor: "idiot", label: "白痴确认身份", targetCount: 0, allowSkip: false });
     }
   }
-  return common.filter((step) => shouldIncludeNightStep(room, step)).map((step, index) => ({ ...step, index }));
+  return common.filter((step) => fixedNight.enabled(room) || shouldIncludeNightStep(room, step)).map((step, index) => ({ ...step, index }));
+}
+
+function rebuildNightStepsAfterDarkAction(room) {
+  const completed = new Set((room.nightActions || [])
+    .filter((action) => action.night === room.night)
+    .map((action) => action.stepId));
+  room.currentNightSteps = createNightSteps(room.boardId, room.night, room)
+    .filter((step) => !completed.has(step.id))
+    .map((step, index) => ({ ...step, index }));
+  room.currentNightStepIndex = 0;
+}
+
+function rebuildNightStepsAfterUndo(room) {
+  const completed = new Set((room.nightActions || [])
+    .filter((action) => action.night === room.night)
+    .map((action) => action.stepId));
+  room.currentNightSteps = createNightSteps(room.boardId, room.night, room)
+    .filter((step) => !completed.has(step.id))
+    .map((step, index) => ({ ...step, index }));
+  room.currentNightStepIndex = 0;
+}
+
+function isSheriffElectionDay(room) {
+  return room?.phase === "DAY" && (room.night === 1 || (room.night === 2 && Number(room.sheriffElectionDeferredDay) === 1));
+}
+
+function isSheriffSelfDestructWindowOpen(room) {
+  return isSheriffElectionDay(room) && Number(room.sheriffStageClosedDay || 0) !== Number(room.night) && !room.sheriffElectionDone && !room.sheriffBadge?.lost;
+}
+
+function recordSheriffElectionSelfDestruct(room, seat) {
+  const assignment = (room.assignments || []).find((item) => Number(item.seat) === Number(seat));
+  if (isDarkDestruction(room) && darkBindingTarget(room, room.night) === Number(seat)) throw new Error("被禁锢的狼人不能自爆");
+  if (!assignment || assignment.alive === false || (assignment.currentCamp || assignment.camp) !== "WOLF"
+    || ["mixed_blood", "mechanical_wolf", "lia"].includes(assignment.roleId)) {
+    throw new Error("自爆座位必须是存活的狼人阵营玩家");
+  }
+  assignment.alive = false;
+  const firstContest = room.night === 1;
+  const record = addDeathRecord(room, {
+    day: room.night,
+    phase: "SELF_DESTRUCT",
+    seats: [Number(seat)],
+    reasons: { [String(seat)]: ["狼人自爆"] },
+    sourceAction: { kind: "SELF_DESTRUCT", seat: Number(seat) },
+    resolutionOrder: 1
+  });
+  if (firstContest) {
+    room.sheriffElectionDeferredDay = 1;
+    room.sheriffElectionDone = true;
+    room.sheriffCandidates = [];
+    room.sheriffWithdrawn = [];
+    room.sheriffVoteRecord = null;
+  } else {
+    room.sheriffElectionDone = true;
+    room.sheriffBadge = { holderSeat: 0, lost: true };
+    room.assignments.forEach((item) => { item.sheriff = false; });
+  }
+  room.pendingSheriffSelfDestructSeat = Number(seat);
+  if (!room.pendingNightResolution) queueDarkDeathResolution(room, [Number(seat)], "SELF_DESTRUCT", record.reasons);
+  room.pendingJudgeNightAfterSelfDestruct = room.mode === "JUDGE";
+  room.pendingSystemNightAfterSelfDestruct = room.mode === "SYSTEM";
+  writeLog(room, "WOLF_SELF_DESTRUCTED", { seat: Number(seat), roleId: assignment.roleId, sheriffElectionDeferred: firstContest, badgeLost: !firstContest });
+  addPublicAnnouncement(room, `${seat}号玩家自爆。`);
+  return record;
 }
 
 function readBody(request) {
@@ -433,6 +572,7 @@ function isSystemAnnouncementReady(room) {
 }
 
 function scheduleSystemAnnouncement(room) {
+  if (fixedNight.submitted(room)) return;
   if (room.mode !== "SYSTEM") return;
   const hasNextStep = (room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length;
   const announcementNotBefore = hasNextStep ? Date.now() + SYSTEM_STEP_ANNOUNCEMENT_DELAY_MS : 0;
@@ -444,6 +584,7 @@ function scheduleSystemAnnouncement(room) {
 }
 
 function startSystemStep(room) {
+  if (fixedNight.enabled(room)) { fixedNight.start(room); return; }
   if (room.mode !== "SYSTEM") return;
   const hasNextStep = (room.currentNightStepIndex || 0) < (room.currentNightSteps || []).length;
   room.systemAnnouncementNotBefore = 0;
@@ -451,24 +592,23 @@ function startSystemStep(room) {
   room.systemStepDeadlineAt = hasNextStep && timeoutSeconds ? Date.now() + timeoutSeconds * 1000 : 0;
 }
 
-function getWolfTeamRoleIds(boardId) {
-  if (boardId === "realm_of_trickery") return ["wolf", "trickster"];
-  if (boardId === "dawn_voyage") return ["wolf", "siren"];
-  if (boardId === "treasure_master") return ["wolf", "wolf_king"];
-  if (boardId === "follow_neighbor") return ["wolf", "wolf_king"];
-  if (boardId === "wolf_king_guard") return ["wolf", "wolf_king"];
-  return ["wolf"];
-}
-
 function canAssignmentAct(room, step, assignment) {
+  if (step?.inactive) return false;
   if (!step || !assignment) return false;
   if (step.id === "treasure_mask_final_kill") {
     return assignment.roleId === "treasure_master" && Number(assignment.seat) === Number(room.treasureMaskedFinalNight?.seat);
   }
   if (assignment.alive === false) return false;
-  if (step.actor === "wolf_team") return getWolfTeamRoleIds(room.boardId).includes(assignment.roleId)
-    || (assignment.roleId === "mechanical_wolf" && !(room.assignments || []).some((item) => item.alive !== false && item.roleId === "wolf"));
+  if (isDarkDestruction(room) && step.id !== "lilith_bind" && step.id !== "lia_raise" && step.id !== "dreamer_dream" && step.actor !== "wolf_team" && isDarkRoleBound(room, assignment.roleId)) return false;
+  if (step.actor === "wolf_team") return wolfKnifePolicy.mayUseNormalWolfKnife(room.boardId, assignment, room.assignments);
   return step.actor === assignment.roleId;
+}
+
+function getDarkIdentityCategory(assignment) {
+  if (!assignment) return "UNKNOWN";
+  if (assignment.roleId === "lia") return "LIA";
+  if ((assignment.currentCamp || assignment.camp) === "WOLF") return "WOLF";
+  return assignment.roleId === "villager" ? "CIVILIAN" : "GOD";
 }
 
 function getSystemNightAccess(room, clientId, controller) {
@@ -478,8 +618,9 @@ function getSystemNightAccess(room, clientId, controller) {
   const seat = room.seats.find((item) => item.clientId === clientId);
   const assignment = seat ? room.assignments.find((item) => item.seat === seat.seat) : null;
   const announcementReady = isSystemAnnouncementReady(room);
-  const canAct = announcementReady && canAssignmentAct(room, step, assignment);
+  const canAct = announcementReady && canAssignmentAct(room, step, assignment) && (!fixedNight.enabled(room) || fixedNight.actionable(room));
   const privateContext = {};
+  if (canAct && step?.id === "mechanical_knife_confirm") privateContext.mechanicalKnifeState = wolfKnifePolicy.privateKnifeState(room.boardId, assignment, room.assignments);
   if (canAct && step?.id === "witch_action" && step.antidoteAvailable) {
     const wolfAction = [...(room.nightActions || [])].reverse().find((action) => action.night === room.night && action.stepId === "wolves_kill" && !action.skipped);
     privateContext.wolfVictimSeat = Number(wolfAction?.targetSeats?.[0] || 0);
@@ -491,13 +632,14 @@ function getSystemNightAccess(room, clientId, controller) {
   }
   return {
     canControl: controller,
+    timing: controller ? fixedNight.view(room) : null,
     canAct,
     announcementReady,
     stepIndex,
     stepCount: room.currentNightSteps?.length || 0,
     complete: !step,
-    stepId: controller || canAct ? step?.id || "" : "",
-    announcement: controller && !announcementReady ? "正在等待下一流程播报" : controller || canAct ? step?.label || "夜间行动已完成" : "夜间流程进行中",
+    stepId: controller && fixedNight.enabled(room) && ["mechanical_guard", "mechanical_poison", "mechanical_check", "mechanical_kill"].includes(step?.id) ? "mechanical_skill_wait" : controller || canAct ? step?.id || "" : "",
+    announcement: controller && fixedNight.enabled(room) && step?.id?.startsWith("mechanical_") ? "机械狼夜间流程" : controller && !announcementReady ? "正在等待下一流程播报" : controller || canAct ? step?.label || "夜间行动已完成" : "夜间流程进行中",
     privateContext,
     timeout: controller && step ? {
       seconds: normalizeSystemStepTimeout(room.systemStepTimeoutSeconds),
@@ -509,6 +651,21 @@ function getSystemNightAccess(room, clientId, controller) {
 
 function buildPrivateNightResult(room, step, action) {
   const selectedSeat = Number(action?.targetSeats?.[0] || 0);
+  if (step.id === "lia_charge") {
+    const target = (room.assignments || []).find((assignment) => assignment.seat === selectedSeat);
+    return { kind: "CHARGE", seat: selectedSeat, success: target?.roleId === "villager" };
+  }
+  if (step.id === "cain_check") {
+    const seats = (action?.targetSeats || []).map(Number);
+    const targets = seats.map((seat) => (room.assignments || []).find((assignment) => assignment.seat === seat));
+    const categories = targets.map(getDarkIdentityCategory);
+    const result = categories.includes("LIA") || categories[0] === categories[1]
+      ? "SAME"
+      : categories.includes("WOLF")
+        ? "WOLF_CLAW"
+        : "DOWN";
+    return { kind: "CAIN", seats, result };
+  }
   if (!selectedSeat) return null;
   let actualSeat = step.id === "seer_check"
     ? resolveNightTarget(room, { night: room.night, scope: "seer_check", seat: selectedSeat }).effectiveSeat
@@ -540,6 +697,35 @@ function buildPrivateNightResult(room, step, action) {
   return null;
 }
 
+function dayVoteRecordForViewer(room, record, judge, assignment) {
+  if (!record) return null;
+  const fogIsActive = isDarkDestruction(room)
+    && Number(room.liaFogDay || 0) === Number(record.day)
+    && Number(room.darkFogAnnouncedDay || 0) === Number(record.day);
+  if (!fogIsActive || judge || (room.mode === "SYSTEM" && assignment?.roleId === "lia")) return record;
+  const visibleCounts = Object.fromEntries((record.topSeats || []).map((seat) => [String(seat), Number(record.counts?.[seat] || 0)]));
+  const { votes, ...publicRecord } = record;
+  return { ...publicRecord, counts: visibleCounts };
+}
+
+function activeDarkBallotForViewer(room, judge, assignment) {
+  const ballot = room.activeDarkBallot;
+  if (!ballot) return null;
+  const fogIsActive = Number(room.liaFogDay || 0) === Number(ballot.day)
+    && Number(room.darkFogAnnouncedDay || 0) === Number(ballot.day);
+  if (judge || (fogIsActive && assignment?.roleId === "lia")) return ballot;
+  return {
+    id: ballot.id || "",
+    day: ballot.day,
+    round: ballot.round,
+    status: ballot.status,
+    voterSeats: ballot.voterSeats,
+    allowedTargets: ballot.allowedTargets,
+    submittedCount: Object.keys(ballot.votes || {}).length,
+    totalVoters: ballot.voterSeats.length
+  };
+}
+
 function sanitizeRoom(room, { clientId, judgeToken }) {
   const judge = isJudge(room, judgeToken);
   const controller = isController(room, judgeToken);
@@ -558,13 +744,20 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
   const activeStep = room.currentNightSteps?.[room.currentNightStepIndex || 0] || null;
   const systemSteps = systemNight && systemNight.canAct && activeStep ? [{ ...activeStep, index: 0 }] : [];
   const myDelayedDeath = myAssignment ? (room.pendingDelayedDeaths || []).find((item) => item.day === room.night && item.seat === myAssignment.seat) || null : null;
-  const pendingMyDeathSkill = myAssignment ? (room.pendingDeathSkills || []).find((item) => item.day === room.night && item.seat === myAssignment.seat) || null : null;
-  const myDeathSkill = pendingMyDeathSkill ? { day: pendingMyDeathSkill.day, seat: pendingMyDeathSkill.seat } : null;
+  const firstPendingDeathSkill = (room.pendingDeathSkills || []).find((item) => item.day === room.night) || null;
+  const pendingMyDeathSkill = myAssignment && Number(firstPendingDeathSkill?.seat) === Number(myAssignment.seat) ? firstPendingDeathSkill : null;
+  const myDeathSkill = pendingMyDeathSkill && pendingMyDeathSkill.eligible !== false ? {
+    day: pendingMyDeathSkill.day,
+    seat: pendingMyDeathSkill.seat,
+    deadlineAt: Number(pendingMyDeathSkill.deadlineAt || 0)
+  } : null;
 
   return {
     id: room.id,
     name: room.name,
     mode: room.mode,
+    fixedNightFlow: room.fixedNightFlow || 0,
+    serverNow: Date.now(),
     boardId: room.boardId,
     phase: room.phase,
     day: room.day,
@@ -581,9 +774,13 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     systemNight,
     systemDaybreakReady: room.mode === "SYSTEM" && controller && Boolean(room.pendingNightResolution),
     systemDayOutcomeRecorded: room.mode === "SYSTEM" && room.systemDayOutcomeRecordedDay === room.night,
+    systemSkillDeadlineAt: systemSkillDeadlineAt(room),
+    daySkillVoice: controller ? dayVoice.view(room) : null,
     systemPendingTasks: room.mode === "SYSTEM" && controller ? {
       delayedDeaths: (room.pendingDelayedDeaths || []).filter((item) => item.day === room.night).length,
-      deathSkills: (room.pendingDeathSkills || []).filter((item) => item.day === room.night).length
+      deathSkills: (room.pendingDeathSkills || []).filter((item) => item.day === room.night).length,
+      archangelRevival: Boolean(room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length),
+      darkBallot: room.activeDarkBallot?.status === "OPEN"
     } : null,
     myDelayedDeath: room.mode === "SYSTEM" ? myDelayedDeath : null,
     myDeathSkill: room.mode === "SYSTEM" ? myDeathSkill : null,
@@ -600,9 +797,16 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     sheriffCandidates: room.sheriffCandidates || [],
     sheriffWithdrawn: room.sheriffWithdrawn || [],
     sheriffElectionDone: Boolean(room.sheriffElectionDone),
+    sheriffElectionDeferredDay: Number(room.sheriffElectionDeferredDay || 0),
+    sheriffStageClosedDay: Number(room.sheriffStageClosedDay || 0),
+    pendingSheriffSelfDestructSeat: Number(room.pendingSheriffSelfDestructSeat || 0),
     sheriffVoteRecord: room.sheriffVoteRecord || null,
     sheriffBadge: room.sheriffBadge || { holderSeat: 0, lost: false },
-    dayVoteRecord: room.dayVoteRecord || null,
+    dayVoteRecord: dayVoteRecordForViewer(room, room.dayVoteRecord, judge, myAssignment),
+    activeDarkBallot: activeDarkBallotForViewer(room, judge, myAssignment),
+    myDarkBallot: mySeat && room.activeDarkBallot?.votes && Object.prototype.hasOwnProperty.call(room.activeDarkBallot.votes, String(mySeat.seat))
+      ? { day: room.activeDarkBallot.day, round: room.activeDarkBallot.round, targetSeat: Number(room.activeDarkBallot.votes[String(mySeat.seat)]) }
+      : null,
     canCorrectDayRecord: judge && canCorrectDayRecord(room),
     dealBalanceMeta: judge ? room.dealBalanceMeta || null : null,
     pendingExileResult: judge || (room.mode === "SYSTEM" && (controller || myOrderPrince)) ? room.pendingExileResult || null : null,
@@ -611,11 +815,24 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     judgeCode: judge ? room.judgeCode : "",
     deathRecords: judge || revealAll ? room.deathRecords || [] : (room.deathRecords || []).map(publicDeathRecord),
     privateEvents: privateEventsForViewer(room, { judge, seat: mySeat?.seat || 0 }),
-    activeDaySkillWindow: daySkillWindowForViewer(room, { judge, controller, seat: mySeat?.seat || 0 }),
+    activeDaySkillWindow: room.mode === "JUDGE" && !judge ? null : daySkillWindowForViewer(room, { judge, controller, seat: mySeat?.seat || 0 }),
     daySkillWindowRecords: judge ? room.daySkillWindowRecords || [] : [],
     pendingNightResolution: judge ? room.pendingNightResolution || null : null,
     pendingDelayedDeaths: judge ? room.pendingDelayedDeaths || [] : [],
     pendingDeathSkills: judge ? room.pendingDeathSkills || [] : [],
+    pendingDarkDeathQueue: judge ? room.pendingDarkDeathQueue || [] : [],
+    pendingArchangelRevival: judge && room.pendingArchangelRevival ? {
+      seat: room.pendingArchangelRevival.seat,
+      phase: room.pendingArchangelRevival.phase,
+      canRevive: !room.pendingArchangelRevival.virtual
+    } : null,
+    myPendingArchangelRevival: room.mode === "SYSTEM" && myAssignment?.roleId === "archangel" && myAssignment.alive !== false && room.pendingArchangelRevival && !room.pendingArchangelRevival.virtual ? {
+      seat: room.pendingArchangelRevival.seat,
+      phase: room.pendingArchangelRevival.phase,
+      deadlineAt: Number(room.pendingArchangelRevival.deadlineAt || 0)
+    } : null,
+    archangelReviveUsed: Boolean(room.archangelReviveUsed),
+    revivalRecords: judge || revealAll ? room.revivalRecords || [] : [],
     deathSkillRecords: judge ? room.deathSkillRecords || [] : [],
     puppetSeat: judge ? Number(room.puppetSeat || 0) : 0,
     publicReveals: (room.assignments || []).filter((assignment) => assignment.roleId === "idiot" && (
@@ -627,7 +844,13 @@ function sanitizeRoom(room, { clientId, judgeToken }) {
     announcedWindDirection: room.phase === "DAY" && room.captainAliveAtDawn ? room.windDirection || "calm" : "",
     boardedSeat: judge ? room.boardedSeat || 0 : 0,
     captainDiedLastDay: judge ? Boolean(room.captainDiedLastDay) : false,
-    captainAliveAtDawn: judge ? Boolean(room.captainAliveAtDawn) : false
+    captainAliveAtDawn: judge ? Boolean(room.captainAliveAtDawn) : false,
+    darkFogAnnouncementPending: Boolean((judge || controller)
+      && isDarkDestruction(room)
+      && Number(room.darkFogAnnouncedDay || 0) !== Number(room.night)),
+    darkFogDay: isDarkDestruction(room) && Number(room.darkFogAnnouncedDay || 0) === Number(room.night)
+      ? Number(room.liaFogDay || 0)
+      : 0
   };
 }
 
@@ -654,16 +877,135 @@ function queueDeathSkills(room, seats, phase, reasonsBySeat = {}) {
       reasons: reasonsBySeat[String(seat)] || [],
       day: room.night
     });
-    if (!resolution) return;
-    const record = { ...resolution, phase, resolved: !resolution.eligible, createdAt: Date.now() };
+    if (!resolution && !dayVoice.enabled(room)) return;
+    const record = {
+      ...(resolution || { seat, day: room.night, eligible: false, roleId: "NONE" }),
+      phase,
+      resolved: dayVoice.enabled(room) ? false : !resolution.eligible,
+      deadlineAt: 0,
+      createdAt: Date.now()
+    };
     room.deathSkillRecords.push(record);
-    if (resolution.eligible && !room.pendingDeathSkills.some((item) => item.seat === seat && item.day === room.night)) {
+    if ((resolution?.eligible || dayVoice.enabled(room)) && !room.pendingDeathSkills.some((item) => item.seat === seat && item.day === room.night)) {
       room.pendingDeathSkills.push(record);
     }
-    writeLog(room, resolution.eligible ? "DEATH_SKILL_PENDING" : "DEATH_SKILL_BLOCKED", record);
+    writeLog(room, resolution?.eligible ? "DEATH_SKILL_PENDING" : "DEATH_SKILL_BLOCKED", record);
     const deathRecord = [...(room.deathRecords || [])].reverse().find((item) => item.day === room.night && item.phase === phase && item.seats?.includes(seat));
-    if (deathRecord) deathRecord.deathSkill = { queued: Boolean(resolution.eligible), resolved: !resolution.eligible, recordSeat: seat };
+    if (deathRecord) deathRecord.deathSkill = { queued: Boolean(resolution?.eligible), resolved: !resolution?.eligible, recordSeat: seat };
   });
+  startNextSystemDeathSkillWindow(room);
+}
+
+function startNextSystemDeathSkillWindow(room) {
+  if (room.mode !== "SYSTEM" || room.pendingArchangelRevival || room.activeDaySkillWindow?.status === "OPEN") return;
+  const next = (room.pendingDeathSkills || []).find((item) => item.day === room.night);
+  if (next && !Number(next.deadlineAt || 0)) next.deadlineAt = Date.now() + 5000;
+}
+
+function systemSkillDeadlineAt(room) {
+  if (dayVoice.enabled(room)) return dayVoice.deadline(room);
+  if (room.mode !== "SYSTEM") return 0;
+  if (room.activeDaySkillWindow?.status === "OPEN") return Number(room.activeDaySkillWindow.deadlineAt || 0);
+  if (room.pendingArchangelRevival) return Number(room.pendingArchangelRevival.deadlineAt || 0);
+  const next = (room.pendingDeathSkills || []).find((item) => item.day === room.night);
+  return Number(next?.deadlineAt || 0);
+}
+
+function expireSystemSkillWindow(room) {
+  if (room.mode !== "SYSTEM" || room.phase !== "DAY") return false;
+  const deadlineAt = systemSkillDeadlineAt(room);
+  if (!deadlineAt || Date.now() < deadlineAt) return false;
+  if (room.activeDaySkillWindow?.status === "OPEN" && room.pendingExileResult) {
+    const record = room.pendingExileResult.record || room.pendingExileResult;
+    room.pendingExileResult = null;
+    room.dayVoteRecord = record;
+    resolveDaySkillWindow(room, { actorSeat: 0, outcome: "DECLINED", detail: { effect: "CONTINUE_EXILE", timedOut: true } });
+    if (record.exiledSeat || record.noExile) finalizeDayVote(room, record);
+    writeLog(room, "ORDER_PRINCE_DECLINED", { day: room.night, timedOut: true });
+    if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
+    return true;
+  }
+  if (room.pendingArchangelRevival) {
+    const pending = room.pendingArchangelRevival;
+    resolveArchangelRevival(room, false);
+    writeLog(room, "ARCHANGEL_REVIVAL_TIMED_OUT", { seat: pending.seat, day: pending.day });
+    if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
+    return true;
+  }
+  const pending = (room.pendingDeathSkills || []).find((item) => item.day === room.night && Number(item.deadlineAt || 0) > 0);
+  if (!pending || Number(pending.deadlineAt) > Date.now()) return false;
+  room.pendingDeathSkills = room.pendingDeathSkills.filter((item) => !(item.day === room.night && item.seat === pending.seat));
+  const record = [...(room.deathSkillRecords || [])].reverse().find((item) => item.day === room.night && item.seat === pending.seat && !item.resolved);
+  if (record) Object.assign(record, { resolved: true, targetSeat: 0, skipped: true, timedOut: true, resolvedAt: Date.now() });
+  writeLog(room, "DEATH_SKILL_RESOLVED", { seat: pending.seat, targetSeat: 0, skipped: true, timedOut: true });
+  advanceDarkDeathResolution(room);
+  startNextSystemDeathSkillWindow(room);
+  if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
+  return true;
+}
+
+function advanceDarkDeathResolution(room) {
+  if (!isDarkDestruction(room) || room.pendingArchangelRevival) return;
+  if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return;
+  room.pendingDarkDeathQueue = room.pendingDarkDeathQueue || [];
+  while (room.pendingDarkDeathQueue.length) {
+    const pending = room.pendingDarkDeathQueue.shift();
+    const assignment = (room.assignments || []).find((item) => item.seat === pending.seat);
+    if (!assignment || assignment.alive !== false) continue;
+    if (!room.archangelReviveUsed && (room.assignments || []).some(item => item.roleId === "archangel")) {
+      room.pendingArchangelRevival = { ...pending, virtual: !canOfferArchangelRevive(room, pending.seat), deadlineAt: room.mode === "SYSTEM" ? Date.now() + 5000 : 0, createdAt: Date.now() };
+      writeLog(room, "ARCHANGEL_REVIVAL_WINDOW_OPENED", { seat: pending.seat, day: pending.day, phase: pending.phase });
+      addPublicAnnouncement(room, "等待天使长发动技能。");
+      return;
+    }
+    queueDeathSkills(room, [pending.seat], pending.phase, { [String(pending.seat)]: pending.reasons || [] });
+    if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return;
+  }
+}
+
+function queueDarkDeathResolution(room, seats, phase, reasonsBySeat = {}) {
+  if (!isDarkDestruction(room)) {
+    queueDeathSkills(room, seats, phase, reasonsBySeat);
+    return;
+  }
+  room.pendingDarkDeathQueue = room.pendingDarkDeathQueue || [];
+  seats.forEach((seat) => {
+    if (!room.pendingDarkDeathQueue.some((item) => item.seat === seat && item.day === room.night)) {
+      room.pendingDarkDeathQueue.push({
+        seat,
+        day: room.night,
+        phase,
+        reasons: reasonsBySeat[String(seat)] || []
+      });
+    }
+  });
+  advanceDarkDeathResolution(room);
+}
+
+function resolveArchangelRevival(room, useRevive) {
+  const pending = room.pendingArchangelRevival;
+  if (!pending) throw new Error("当前没有待处理的天使长复活窗口");
+  const assignment = (room.assignments || []).find((item) => item.seat === pending.seat);
+  if (useRevive && (!canOfferArchangelRevive(room, pending.seat) || !assignment || assignment.alive !== false)) throw new Error("该玩家当前不能被复活");
+  room.pendingArchangelRevival = null;
+  if (useRevive) {
+    if (!canOfferArchangelRevive(room, pending.seat) || !assignment || assignment.alive !== false) {
+      throw new Error("该玩家当前不能被复活");
+    }
+    assignment.alive = true;
+    room.archangelReviveUsed = true;
+    room.revivalRecords = room.revivalRecords || [];
+    const record = { seat: pending.seat, day: pending.day, phase: pending.phase, createdAt: Date.now() };
+    room.revivalRecords.push(record);
+    const deathRecord = [...(room.deathRecords || [])].reverse().find((item) => item.day === pending.day && item.phase === pending.phase && item.seats?.includes(pending.seat));
+    if (deathRecord) deathRecord.revivedSeats = [...new Set([...(deathRecord.revivedSeats || []), pending.seat])];
+    writeLog(room, "ARCHANGEL_REVIVED", record);
+    addPublicAnnouncement(room, `${pending.seat}号玩家被天使长复活。`);
+  } else {
+    queueDeathSkills(room, [pending.seat], pending.phase, { [String(pending.seat)]: pending.reasons || [] });
+    writeLog(room, "ARCHANGEL_REVIVAL_DECLINED", { seat: pending.seat, day: pending.day, phase: pending.phase });
+  }
+  advanceDarkDeathResolution(room);
 }
 
 function maybeCompleteSystemGame(room) {
@@ -671,6 +1013,7 @@ function maybeCompleteSystemGame(room) {
   if (["PENDING", "ACTIVE"].includes(room.treasureMaskedFinalNight?.status)) return null;
   if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return null;
   if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return null;
+  if (room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length) return null;
   const result = getGameOutcome(room);
   if (!result) return null;
   room.phase = "GAME_OVER";
@@ -683,6 +1026,12 @@ function maybeCompleteSystemGame(room) {
 
 function beginNight(room) {
   room.night += 1;
+  if (room.night === 2 && Number(room.sheriffElectionDeferredDay) === 1) {
+    room.sheriffCandidates = [];
+    room.sheriffWithdrawn = [];
+    room.sheriffVoteRecord = null;
+    room.sheriffElectionDone = false;
+  }
   room.phase = "NIGHT";
   room.lastWindDirection = room.windDirection || "calm";
   room.boardedSeat = 0;
@@ -697,13 +1046,17 @@ function beginNight(room) {
 }
 
 function continueAfterSystemSelfDestruct(room) {
-  if (!room.pendingSystemNightAfterSelfDestruct) return false;
+  if (!room.pendingSystemNightAfterSelfDestruct && !room.pendingJudgeNightAfterSelfDestruct) return false;
+  if (room.pendingNightResolution || (room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return false;
+  if (room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length) return false;
   if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return false;
-  if (maybeCompleteSystemGame(room)) {
+  if (room.mode === "SYSTEM" && maybeCompleteSystemGame(room)) {
     room.pendingSystemNightAfterSelfDestruct = false;
     return true;
   }
   room.pendingSystemNightAfterSelfDestruct = false;
+  room.pendingJudgeNightAfterSelfDestruct = false;
+  room.pendingSheriffSelfDestructSeat = 0;
   beginNight(room);
   return true;
 }
@@ -715,7 +1068,14 @@ function getAliveSeats(room) {
 }
 
 function isSheriffElectionFinished(room) {
-  if (!room || room.night !== 1) return true;
+  if (!room) return true;
+  if (Number(room.sheriffStageClosedDay || 0) === Number(room.night)) return true;
+  if (room.night === 1 && Number(room.sheriffElectionDeferredDay) === 1) return true;
+  if (room.night === 2 && Number(room.sheriffElectionDeferredDay) === 1) {
+    return Boolean(room.sheriffElectionDone || room.sheriffBadge?.holderSeat || room.sheriffBadge?.lost);
+  }
+  if (room.night !== 1) return true;
+  if (room.sheriffBadge?.holderSeat || room.sheriffBadge?.lost) return true;
   if (room.sheriffElectionDone) return true;
   const record = room.sheriffVoteRecord;
   return Boolean(record && (record.electedSeat || record.badgeLost));
@@ -749,6 +1109,12 @@ function captureDayRecordUndo(room, stage) {
       pendingNightResolution: room.pendingNightResolution,
       pendingDelayedDeaths: room.pendingDelayedDeaths,
       pendingDeathSkills: room.pendingDeathSkills,
+      pendingDarkDeathQueue: room.pendingDarkDeathQueue,
+      pendingArchangelRevival: room.pendingArchangelRevival,
+      activeDarkBallot: room.activeDarkBallot,
+      darkFogAnnouncedDay: room.darkFogAnnouncedDay,
+      archangelReviveUsed: room.archangelReviveUsed,
+      revivalRecords: room.revivalRecords,
       deathSkillRecords: room.deathSkillRecords,
       treasureMaskedFinalNight: room.treasureMaskedFinalNight
     }),
@@ -760,7 +1126,9 @@ function canCorrectDayRecord(room) {
   const undo = room.dayRecordUndo;
   if (room.mode !== "JUDGE" || room.phase !== "DAY" || !undo || undo.day !== room.night) return false;
   const currentPending = (items) => (items || []).some((item) => item.day === room.night);
-  if (currentPending(room.pendingDelayedDeaths) || currentPending(room.pendingDeathSkills)) return false;
+  if (currentPending(room.pendingDelayedDeaths) || currentPending(room.pendingDeathSkills)
+    || room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length
+    || room.activeDarkBallot?.status === "OPEN") return false;
   if ((room.deathSkillRecords || []).some((item) => item.day === room.night)) return false;
   if (undo.stage === "DAYBREAK") {
     return !hasCurrentExileRecord(room) && !room.dayVoteRecord && !room.pendingExileResult && !room.orderPrinceRevotePending;
@@ -780,20 +1148,38 @@ function calculateDayVote(room, body) {
   const previous = room.dayVoteRecord;
   const eligiblePkSeats = previous && previous.day === room.night && previous.round === 1 && previous.pkSeats?.length > 1 ? previous.pkSeats : [];
   const pkSeats = round === 2 ? eligiblePkSeats : [];
-  const allowedTargets = round === 1 ? aliveSeats : pkSeats;
+  const isDark = isDarkDestruction(room);
+  const boundSeat = isDark ? darkBindingTarget(room, room.night) : 0;
+  const allowedTargets = round === 1
+    ? aliveSeats.filter((seat) => !isDark || seat !== boundSeat)
+    : pkSeats.filter((seat) => !isDark || seat !== boundSeat);
+  const allowedVoters = round === 2 ? aliveSeats.filter((seat) => !pkSeats.includes(seat)) : aliveSeats;
+  const blessedSeat = isDark && hasUsedArchangelBless(room)
+    ? Number((room.nightActions || []).find((action) => action.night === room.night && action.stepId === "archangel_bless" && !action.skipped)?.targetSeats?.[0] || 0)
+    : 0;
+  const blessedAssignment = (room.assignments || []).find((assignment) => assignment.seat === blessedSeat);
+  const blessedVoterSeat = blessedAssignment?.roleId !== "lilith" ? blessedSeat : 0;
   const seenVoters = new Set();
-  const votes = (Array.isArray(body.votes) ? body.votes : []).filter((vote) => {
+  const votes = (Array.isArray(body.votes) ? body.votes : []).flatMap((vote) => {
     const voterSeat = Number(vote.voterSeat);
     const targetSeat = Number(vote.targetSeat);
-    if (!aliveSeats.includes(voterSeat) || !allowedTargets.includes(targetSeat) || seenVoters.has(voterSeat)) return false;
+    const isRawBoundVote = isDark && targetSeat === boundSeat;
+    const isAbstention = targetSeat === 0;
+    if (!allowedVoters.includes(voterSeat) || !(allowedTargets.includes(targetSeat) || isRawBoundVote || isAbstention) || seenVoters.has(voterSeat)) return [];
     seenVoters.add(voterSeat);
-    return true;
+    if (!isDark) return [{ voterSeat, targetSeat, weight: 1, counted: targetSeat !== 0 }];
+    const weight = voterSeat === blessedVoterSeat ? 3 : 1;
+    return [{ voterSeat, targetSeat, weight, counted: targetSeat !== 0 && targetSeat !== boundSeat }];
   });
   const counts = {};
   allowedTargets.forEach((seat) => { counts[seat] = 0; });
   votes.forEach((vote) => {
     const targetSeat = Number(vote.targetSeat);
-    if (allowedTargets.includes(targetSeat)) counts[targetSeat] += 1;
+    if (isDark) {
+      if (vote.counted && allowedTargets.includes(targetSeat)) counts[targetSeat] += vote.weight;
+    } else if (allowedTargets.includes(targetSeat)) {
+      counts[targetSeat] += 1;
+    }
   });
   const maxVotes = Math.max(0, ...Object.values(counts));
   const topSeats = Object.keys(counts).map(Number).filter((seat) => counts[seat] === maxVotes && maxVotes > 0);
@@ -810,6 +1196,88 @@ function calculateDayVote(room, body) {
     noExile,
     createdAt: Date.now()
   };
+}
+
+function openDarkBallot(room, round) {
+  if (room.mode !== "SYSTEM") throw new Error("手机投票仅用于无法官模式");
+  if (room.phase !== "DAY" || !hasCurrentDaybreakRecord(room)) throw new Error("请先完成天亮死讯");
+  if (hasCurrentExileRecord(room) || room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length
+    || (room.pendingDeathSkills || []).some((item) => item.day === room.night)
+    || (room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) throw new Error("请先完成当日死亡结算");
+  if (room.activeDarkBallot?.status === "OPEN") throw new Error("投票已经开始");
+  if (room.activeDaySkillWindow?.status === "OPEN" || room.pendingExileResult) throw new Error("请先完成当前白天技能窗口");
+  const requestedRound = Number(round || 1);
+  if (requestedRound === 1 && room.dayVoteRecord?.day === room.night && !room.orderPrinceRevotePending) throw new Error("本日第一轮投票已经完成");
+  if (requestedRound === 2 && !(room.dayVoteRecord?.day === room.night && room.dayVoteRecord.round === 1 && room.dayVoteRecord.pkSeats?.length > 1)) {
+    throw new Error("当前没有待进行的 PK 投票");
+  }
+  if (requestedRound !== 1 && requestedRound !== 2) throw new Error("投票轮次不合法");
+  const fog = Number(room.liaFogDay || 0) === Number(room.night);
+  if (isDarkDestruction(room) && Number(room.darkFogAnnouncedDay || 0) !== Number(room.night)) throw new Error("请先公布本日禁锢与迷雾状态，再开始私密投票");
+  const pkSeats = requestedRound === 2 ? room.dayVoteRecord.pkSeats.map(Number) : [];
+  const voterSeats = getAliveSeats(room).filter((seat) => requestedRound !== 2 || !pkSeats.includes(seat));
+  const allowedTargets = requestedRound === 2 ? pkSeats : getAliveSeats(room);
+  room.activeDarkBallot = {
+    id: crypto.randomBytes(12).toString("hex"),
+    day: room.night,
+    round: requestedRound,
+    status: "OPEN",
+    voterSeats,
+    allowedTargets,
+    votes: {},
+    princeRevote: Boolean(room.orderPrinceRevotePending),
+    openedAt: Date.now()
+  };
+  room.darkBallotRound = requestedRound;
+  writeLog(room, "DARK_BALLOT_OPENED", { day: room.night, round: requestedRound, fog });
+  addPublicAnnouncement(room, fog
+    ? `${requestedRound === 2 ? "PK 投票前再次提醒：" : "公投前再次提醒："}迷雾开启，全体戴盔投票。`
+    : `${requestedRound === 2 ? "开始 PK 投票。" : "开始放逐投票。"}`);
+}
+
+function announceDarkFog(room) {
+  if (!isDarkDestruction(room)) throw new Error("当前版型不使用暗黑迷雾公告");
+  if (room.phase !== "DAY" || !hasCurrentDaybreakRecord(room)) throw new Error("请先完成天亮死讯");
+  if (!isSheriffElectionFinished(room)) throw new Error("请先结束警上进入警下");
+  if (Number(room.darkFogAnnouncedDay || 0) === Number(room.night)) throw new Error("本日迷雾状态已经公布");
+  if (room.activeDarkBallot?.status === "OPEN" || hasCurrentExileRecord(room)
+    || room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length
+    || (room.pendingDeathSkills || []).some((item) => item.day === room.night)
+    || (room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) {
+    throw new Error("请先完成当日死亡或投票结算");
+  }
+  room.darkFogAnnouncedDay = room.night;
+  const bound = darkBindingTarget(room, room.night);
+  const fog = Number(room.liaFogDay || 0) === Number(room.night);
+  addPublicAnnouncement(room, `警下宣布：迷雾${fog ? "开启" : "未开启"}，昨夜${bound ? `${bound}号玩家被禁锢` : "无人被禁锢"}。${fog ? "全体戴盔投票。" : ""}`);
+  writeLog(room, "DARK_FOG_ANNOUNCED", { day: room.night });
+}
+
+function closeDarkBallot(room) {
+  const ballot = room.activeDarkBallot;
+  if (!ballot || ballot.status !== "OPEN" || ballot.day !== room.night) throw new Error("当前没有进行中的投票");
+  const missing = ballot.voterSeats.filter((seat) => !Object.prototype.hasOwnProperty.call(ballot.votes, String(seat)));
+  if (missing.length) throw new Error(`还有 ${missing.length} 名玩家未提交投票或弃票`);
+  const votes = Object.entries(ballot.votes).map(([voterSeat, targetSeat]) => ({ voterSeat: Number(voterSeat), targetSeat: Number(targetSeat) }));
+  const record = calculateDayVote(room, { round: ballot.round, votes });
+  room.dayVoteRecord = record;
+  room.activeDarkBallot = null;
+  room.darkBallotRound = 0;
+  writeLog(room, "DARK_BALLOT_CLOSED", { day: record.day, round: record.round, counts: record.counts, topSeats: record.topSeats, abstentions: record.votes.filter((vote) => !Number(vote.targetSeat)).length });
+  if (room.boardId === "realm_of_trickery" && record.round === 1 && !room.orderPrinceUsed && !ballot.princeRevote) {
+    room.pendingExileResult = { day: room.night, record, createdAt: Date.now() };
+    const princeSeat = (room.assignments || []).find((assignment) => assignment.roleId === "order_prince" && assignment.alive !== false)?.seat || 0;
+    openDaySkillWindow(room, { id: `order-prince-rewind-${room.night}`, day: room.night, trigger: "AFTER_FIRST_DAY_VOTE", kind: "ORDER_PRINCE_REWIND", eligibleSeats: princeSeat ? [princeSeat] : [], action: "ACTIVATE_OR_DECLINE", resume: "DAY_VOTE_OR_EXILE", metadata: { rawExiledSeat: Number(record.exiledSeat || 0), tied: record.topSeats?.length > 1 } });
+    writeLog(room, "DAY_VOTE_PENDING", record);
+    return;
+  }
+  if (ballot.princeRevote) room.orderPrinceRevotePending = false;
+  if (record.exiledSeat || record.noExile) {
+    finalizeDayVote(room, record, "DARK_PRIVATE_BALLOT");
+  } else if (record.pkSeats.length) {
+    const voteCount = Number(record.counts[record.pkSeats[0]] || 0);
+    addPublicAnnouncement(room, `${record.pkSeats.map((seat) => `${seat}号`).join("、")}平票，各 ${voteCount} 票，进入 PK。`);
+  }
 }
 
 function finalizeDayVote(room, record, source = "DAY_VOTE") {
@@ -829,7 +1297,7 @@ function finalizeDayVote(room, record, source = "DAY_VOTE") {
       room.treasureMaskedFinalNight = { seat: actualExiledSeat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
       writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
     } else {
-      queueDeathSkills(room, [actualExiledSeat], "EXILE");
+      queueDarkDeathResolution(room, [actualExiledSeat], "EXILE");
     }
   }
   const exileRecord = { day: room.night, seat: actualExiledSeat, rawSeat: rawExiledSeat, noExile: record.noExile, source, createdAt: Date.now() };
@@ -844,6 +1312,8 @@ function finalizeDayVote(room, record, source = "DAY_VOTE") {
 }
 
 function validateNightAction(room, step, targetSeats, skipped, cardRoleId = "") {
+  if (step.id === "lilith_bind" && step.inactive && !skipped) return "莉莉丝已出局，不能发动禁锢";
+  if (step.id === "lia_fog" && !skipped && (!hasSuccessfulLiaCharge(room) || hasUsedLiaFog(room) || isDarkRoleBound(room, "lia") || !(room.assignments || []).some((item) => item.roleId === "lia" && item.alive !== false))) return "莉娅当前不能开启迷雾";
   if (step.id === "treasure_pick") {
     const treasure = (room.assignments || []).find((assignment) => assignment.roleId === "treasure_master");
     const cards = treasure?.abilityState?.treasureCards || [];
@@ -857,12 +1327,27 @@ function validateNightAction(room, step, targetSeats, skipped, cardRoleId = "") 
     if (["spirit_medium", "dreamer"].includes(activeCard) && skipped) return "当前盗宝牌必须选择一名目标";
     if (["villager", "hunter"].includes(activeCard) && !skipped) return "当前盗宝牌没有主动夜间技能";
     if (activeCard === "poisoner" && !skipped && (room.nightActions || []).some((action) => action.stepId === "treasure_skill" && action.cardRoleId === "poisoner" && !action.skipped)) return "盗宝毒师的毒药已经使用过";
-    if (activeCard === "wolf" && !skipped && (room.assignments || []).some((assignment) => assignment.alive !== false && ["wolf", "wolf_king"].includes(assignment.roleId))) return "仍有狼人同伴存活，盗宝狼人不能发动击杀";
+    if (activeCard === "wolf" && !skipped) return "盗宝狼人牌不提供额外技能刀，请在狼人夜使用普通狼刀";
   }
   if (step.id === "dreamer_dream" || (step.id === "treasure_skill" && cardRoleId === "dreamer")) {
     const sourceRole = step.id === "dreamer_dream" ? "dreamer" : "treasure_master";
     const sourceSeat = (room.assignments || []).find((assignment) => assignment.roleId === sourceRole)?.seat;
     if (!skipped && targetSeats.includes(Number(sourceSeat))) return "摄梦目标不能是技能来源本人";
+  }
+  if (isDarkDestruction(room) && !skipped) {
+    const archangelSeat = darkRoleSeat(room, "archangel");
+    if (step.id === "lilith_bind") {
+      const lilithSeat = darkRoleSeat(room, "lilith");
+      if (Number(targetSeats[0]) === Number(lilithSeat)) return "莉莉丝不能禁锢自己";
+      const previous = (room.nightActions || []).find((action) => action.night === room.night - 1 && action.stepId === "lilith_bind" && !action.skipped);
+      if (Number(previous?.targetSeats?.[0]) === Number(targetSeats[0])) return "莉莉丝不能连续两晚禁锢同一名玩家";
+    }
+    if (step.id === "archangel_bless" && Number(targetSeats[0]) === Number(archangelSeat)) return "天使长不能祝福自己";
+    if (step.id === "cain_check") {
+      const cainSeat = darkRoleSeat(room, "cain");
+      if (targetSeats.some((seat) => Number(seat) === Number(cainSeat))) return "凯恩不能选择自己作为鉴定对象";
+      if (Number(targetSeats[0]) === Number(targetSeats[1])) return "凯恩必须选择两名不同玩家";
+    }
   }
   if (step.id === "poisoner_poison" && !skipped && hasUsedNightStep(room, "poisoner_poison")) return "毒师的毒药已经使用过";
   if (skipped) return "";
@@ -921,6 +1406,7 @@ async function handleApi(request, response, url) {
       id: createRoomId(),
       name: "十二点天黑",
       mode: body.mode === "SYSTEM" ? "SYSTEM" : "JUDGE",
+      fixedNightFlow: body.fixedNightFlow === 1 ? 1 : 0,
       boardId: body.boardId,
       phase: "WAITING",
       day: 0,
@@ -955,6 +1441,14 @@ async function handleApi(request, response, url) {
       pendingNightResolution: null,
       pendingDelayedDeaths: [],
       pendingDeathSkills: [],
+      pendingDarkDeathQueue: [],
+      pendingArchangelRevival: null,
+      activeDarkBallot: null,
+      darkBallotRound: 0,
+      liaFogDay: 0,
+      darkFogAnnouncedDay: 0,
+      archangelReviveUsed: false,
+      revivalRecords: [],
       deathSkillRecords: [],
       publicAnnouncements: [],
       systemDayOutcomeRecordedDay: 0,
@@ -1008,7 +1502,8 @@ async function handleApi(request, response, url) {
     });
   }
 
-  if (body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
+  const sameBallot = target.action === "dark-ballot-vote" && body.ballotId && body.ballotId === room.activeDarkBallot?.id;
+  if (target.action !== "seat" && !sameBallot && body.expectedRevision !== undefined && Number(body.expectedRevision) !== Number(room.revision || 0)) {
     return sendError(response, 409, "房间状态已更新，请刷新后重试");
   }
 
@@ -1046,6 +1541,9 @@ async function handleApi(request, response, url) {
     room.controllerTransferFailures = 0;
     room.controllerTransferLockedUntil = 0;
     writeLog(room, "CONTROLLER_TRANSFERRED", { phase: transferPhase, beforeDeal: transferPhase === "WAITING" });
+    if (fixedNight.enabled(room) && room.fixedNightTiming) fixedNight.control(room, "pause", room.fixedNightTiming.key);
+    const voiceGate = dayVoice.ensure(room);
+    if (voiceGate) dayVoice.control(room, "pause", voiceGate.key);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken: room.judgeToken }),
       judgeToken: room.judgeToken,
@@ -1076,7 +1574,7 @@ async function handleApi(request, response, url) {
     const targetSeat = room.seats.find((seat) => seat.seat === seatNumber);
     if (!targetSeat) return sendError(response, 400, "座位不存在");
     if (targetSeat.occupied && targetSeat.clientId && targetSeat.clientId !== clientId) {
-      return sendError(response, 400, "座位已被占用");
+      return sendError(response, 409, "该号码刚被其他玩家选中，房间状态已刷新，请选择空位");
     }
     room.seats.forEach((seat) => {
       if (seat.clientId === clientId) {
@@ -1132,11 +1630,29 @@ async function handleApi(request, response, url) {
     });
   }
 
-  if (target.action === "sheriff-candidates") {
-    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录上警");
-    if (room.phase !== "DAY" || room.night !== 1) {
-      return sendError(response, 400, "上警应在第一夜结束后的第一天白天记录");
+  if (target.action === "sheriff-stage-close") {
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或控制设备可以结束警上");
+    if (!isSheriffElectionDay(room)) return sendError(response, 400, "当前不在警长竞选日");
+    room.sheriffStageClosedDay = room.night;
+    writeLog(room, "SHERIFF_STAGE_CLOSED", { day: room.night });
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+  }
+
+  if (target.action === "sheriff-election-self-destruct") {
+    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有法官可以记录警长竞选中的自爆");
+    if (!isSheriffSelfDestructWindowOpen(room)) return sendError(response, 400, "当前没有可记录自爆的警长竞选流程");
+    try {
+      recordSheriffElectionSelfDestruct(room, Number(body.seat));
+    } catch (error) {
+      return sendError(response, 400, error.message);
     }
+    continueAfterSystemSelfDestruct(room);
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+  }
+
+  if (target.action === "sheriff-candidates") {
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或公共控制设备可以记录上警");
+    if (!isSheriffElectionDay(room)) return sendError(response, 400, "当前不是警长竞选阶段");
     const seats = Array.isArray(body.seats)
       ? [...new Set(body.seats.map(Number).filter((seat) => seat >= 1 && seat <= 12))].sort((a, b) => a - b)
       : [];
@@ -1152,10 +1668,8 @@ async function handleApi(request, response, url) {
   }
 
   if (target.action === "sheriff-withdraw") {
-    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录退水");
-    if (room.phase !== "DAY" || room.night !== 1) {
-      return sendError(response, 400, "退水应在第一天警上阶段记录");
-    }
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或公共控制设备可以记录退水");
+    if (!isSheriffElectionDay(room)) return sendError(response, 400, "当前不是警长竞选阶段");
     const candidates = room.sheriffCandidates || [];
     const seats = Array.isArray(body.seats)
       ? [...new Set(body.seats.map(Number).filter((seat) => candidates.includes(seat)))].sort((a, b) => a - b)
@@ -1173,9 +1687,8 @@ async function handleApi(request, response, url) {
   }
 
   if (target.action === "sheriff-self-withdraw") {
-    if (room.phase !== "DAY" || room.night !== 1) {
-      return sendError(response, 400, "退水应在第一天警上阶段记录");
-    }
+    if (room.mode !== "SYSTEM") return sendError(response, 403, "有法官模式由法官记录退水");
+    if (!isSheriffElectionDay(room)) return sendError(response, 400, "当前不是警长竞选阶段");
     const mySeat = room.seats.find((seat) => seat.clientId === clientId);
     if (!mySeat) return sendError(response, 400, "请先选择座位");
     const candidates = room.sheriffCandidates || [];
@@ -1195,10 +1708,8 @@ async function handleApi(request, response, url) {
   }
 
   if (target.action === "sheriff-vote") {
-    if (!isJudge(room, judgeToken)) return sendError(response, 403, "只有房主可以记录警徽投票");
-    if (room.phase !== "DAY" || room.night !== 1) {
-      return sendError(response, 400, "警徽投票应在第一天警上阶段记录");
-    }
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或公共控制设备可以记录警徽投票");
+    if (!isSheriffElectionDay(room)) return sendError(response, 400, "当前不是警长竞选阶段");
     const candidates = room.sheriffCandidates || [];
     const withdrawn = room.sheriffWithdrawn || [];
     const activeCandidates = candidates.filter((seat) => !withdrawn.includes(seat));
@@ -1266,7 +1777,9 @@ async function handleApi(request, response, url) {
     const seats = Array.isArray(body.seats)
       ? [...new Set(body.seats.map(Number).filter((seat) => seat >= 1 && seat <= 12))].sort((a, b) => a - b)
       : [];
-    const invalidSeat = seats.find((seat) => !room.assignments.some((item) => item.seat === seat && item.alive !== false));
+    const boomSeat = Number(room.pendingSheriffSelfDestructSeat || 0);
+    if (boomSeat && (room.pendingNightResolution?.deaths || []).some((item) => Number(item.seat) === boomSeat) && !seats.includes(boomSeat)) return sendError(response, 400, "自爆玩家也是昨夜死亡玩家，请在警上宣布该死讯");
+    const invalidSeat = seats.find((seat) => seat !== boomSeat && !room.assignments.some((item) => item.seat === seat && item.alive !== false));
     if (invalidSeat) return sendError(response, 400, `${invalidSeat}号不是存活玩家，不能记录为天亮死亡`);
     captureDayRecordUndo(room, "DAYBREAK");
     seats.forEach((seat) => {
@@ -1301,8 +1814,10 @@ async function handleApi(request, response, url) {
       sourceAction: { kind: hadPendingNightResolution ? "NIGHT_RESOLUTION" : "JUDGE_RECORD", night: room.night },
       resolutionOrder: 1
     });
-    queueDeathSkills(room, seats, "DAYBREAK", reasons);
+    queueDarkDeathResolution(room, seats.filter((seat) => seat !== boomSeat), "DAYBREAK", reasons);
+    if (boomSeat) queueDarkDeathResolution(room, [boomSeat], "SELF_DESTRUCT", { [String(boomSeat)]: ["狼人自爆"] });
     writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
+    continueAfterSystemSelfDestruct(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken })
     });
@@ -1343,6 +1858,28 @@ async function handleApi(request, response, url) {
     });
   }
 
+  if (target.action === "archangel-revival") {
+    if (!room.pendingArchangelRevival) return sendError(response, 400, "当前没有待处理的天使长复活窗口");
+    if (room.mode === "SYSTEM" && room.pendingArchangelRevival.virtual) return sendError(response, 403, "当前没有可发动的复活技能");
+    const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
+    const ownAssignment = (room.assignments || []).find((item) => item.seat === ownSeat);
+    const canDecide = isJudge(room, judgeToken)
+      || (room.mode === "SYSTEM" && ownAssignment?.roleId === "archangel" && ownAssignment.alive !== false);
+    if (!canDecide) return sendError(response, 403, "只有法官或存活的天使长可以处理复活窗口");
+    if (room.mode === "SYSTEM" && systemSkillDeadlineAt(room) && Date.now() >= systemSkillDeadlineAt(room)) {
+      expireSystemSkillWindow(room);
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
+    try {
+      resolveArchangelRevival(room, Boolean(body.use));
+    } catch (error) {
+      return sendError(response, 400, error.message);
+    }
+    startNextSystemDeathSkillWindow(room);
+    if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+  }
+
   if (target.action === "death-skill") {
     const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
     if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && ownSeat === Number(body.seat || 0))) return sendError(response, 403, "只有本人可以处理死亡技能");
@@ -1351,11 +1888,19 @@ async function handleApi(request, response, url) {
     const targetSeat = Number(body.targetSeat || 0);
     const pending = (room.pendingDeathSkills || []).find((item) => item.day === room.night && item.seat === seat);
     if (!pending) return sendError(response, 400, "没有该玩家待处理的死亡技能");
+    if (pending.eligible === false) return sendError(response, 403, "当前玩家没有可发动的死亡技能");
+    const firstPending = (room.pendingDeathSkills || []).find((item) => item.day === room.night);
+    if (firstPending?.seat !== pending.seat) return sendError(response, 409, "请等待前一名玩家的技能窗口处理完成");
+    if (room.mode === "SYSTEM" && systemSkillDeadlineAt(room) && Date.now() >= systemSkillDeadlineAt(room)) {
+      expireSystemSkillWindow(room);
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
     if (targetSeat === seat) return sendError(response, 400, "不能选择自己作为开枪目标");
     const suppressed = Boolean(pending.suppressed);
     if (targetSeat && !suppressed) {
       const targetAssignment = room.assignments.find((item) => item.seat === targetSeat);
       if (!targetAssignment || targetAssignment.alive === false) return sendError(response, 400, "开枪目标必须是存活玩家");
+      if (isDarkDestruction(room) && targetAssignment.roleId === "dreamer" && darkBindingTarget(room) === targetSeat) return sendError(response, 400, "被禁锢的摄梦人次日白天不能出局");
       targetAssignment.alive = false;
       addDeathRecord(room, {
         day: room.night,
@@ -1365,6 +1910,7 @@ async function handleApi(request, response, url) {
         sourceAction: { kind: "DEATH_SKILL", seat },
         resolutionOrder: 3
       });
+      queueDarkDeathResolution(room, [targetSeat], "SHOT", { [String(targetSeat)]: [`${seat}号死亡技能`] });
     }
     room.pendingDeathSkills = (room.pendingDeathSkills || []).filter((item) => !(item.day === room.night && item.seat === seat));
     const record = [...(room.deathSkillRecords || [])].reverse().find((item) => item.day === room.night && item.seat === seat && !item.resolved);
@@ -1373,13 +1919,73 @@ async function handleApi(request, response, url) {
     if (sourceDeath) sourceDeath.deathSkill = { ...(sourceDeath.deathSkill || {}), queued: true, resolved: true, targetSeat, suppressed };
     writeLog(room, "DEATH_SKILL_RESOLVED", { seat, targetSeat, skipped: !targetSeat, suppressed });
     if (room.mode === "SYSTEM" && targetSeat && !suppressed) addPublicAnnouncement(room, `${seat}号玩家发动技能，${targetSeat}号玩家死亡。`);
+    advanceDarkDeathResolution(room);
+    startNextSystemDeathSkillWindow(room);
     if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
     return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
 
+  if (target.action === "dark-fog-announce") {
+    if (!isDarkDestruction(room)) return sendError(response, 400, "当前版型不使用暗黑迷雾公告");
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或公共控制设备可以公布迷雾状态");
+    try {
+      announceDarkFog(room);
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    } catch (error) {
+      return sendError(response, 400, error.message);
+    }
+  }
+
+  if (target.action === "dark-ballot-open") {
+    if (room.mode !== "SYSTEM") return sendError(response, 403, "有法官模式请由法官记录线下票型");
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或公共控制设备可以开始投票");
+    try {
+      openDarkBallot(room, Number(body.round || 1));
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    } catch (error) {
+      return sendError(response, 400, error.message);
+    }
+  }
+
+  if (target.action === "dark-ballot-vote") {
+    if (room.mode !== "SYSTEM") return sendError(response, 403, "有法官模式请由法官记录线下票型");
+    const ballot = room.activeDarkBallot;
+    if (!ballot || ballot.status !== "OPEN" || ballot.day !== room.night) return sendError(response, 400, "当前没有进行中的投票");
+    if (body.ballotId && body.ballotId !== ballot.id) return sendError(response, 409, "投票轮次已更新，请刷新后重新选择");
+    const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
+    const targetSeat = Number(body.targetSeat);
+    if (!ownSeat || !ballot.voterSeats.includes(ownSeat) || !(room.assignments || []).some((item) => item.seat === ownSeat && item.alive !== false)) {
+      return sendError(response, 403, "只有本轮存活且有投票资格的玩家可以投票");
+    }
+    if (!Number.isInteger(targetSeat) || (targetSeat !== 0 && !ballot.allowedTargets.includes(targetSeat))) return sendError(response, 400, "投票目标不合法");
+    if (Object.prototype.hasOwnProperty.call(ballot.votes, String(ownSeat))) {
+      const previousTarget = Number(ballot.votes[String(ownSeat)]);
+      if (previousTarget !== targetSeat) return sendError(response, 409, "投票已提交，以首次成功提交的选择为准");
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }), alreadySubmitted: true });
+    }
+    ballot.votes[String(ownSeat)] = targetSeat;
+    writeLog(room, "DARK_BALLOT_SUBMITTED", { day: ballot.day, round: ballot.round, voterSeat: ownSeat });
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+  }
+
+  if (target.action === "dark-ballot-close") {
+    if (room.mode !== "SYSTEM") return sendError(response, 403, "有法官模式请由法官记录线下票型");
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或公共控制设备可以结束投票");
+    try {
+      closeDarkBallot(room);
+      if (room.mode === "SYSTEM") maybeCompleteSystemGame(room);
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    } catch (error) {
+      return sendError(response, 400, error.message);
+    }
+  }
+
   if (target.action === "day-vote") {
-    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && room.boardId === "realm_of_trickery" && isController(room, judgeToken))) return sendError(response, 403, "只有该版型的控制设备可以记录放逐投票");
+    if (isDarkDestruction(room) && room.mode !== "JUDGE") return sendError(response, 400, "无法官暗黑破坏 2.0 必须使用逐座位私密投票");
+    if (!isJudge(room, judgeToken) && !(room.mode === "SYSTEM" && isController(room, judgeToken))) return sendError(response, 403, "只有法官或控制设备可以记录放逐投票");
+    if (isDarkDestruction(room) && Number(room.liaFogDay || 0) === Number(room.night) && Number(room.darkFogAnnouncedDay || 0) !== Number(room.night)) return sendError(response, 400, "请先公布本日迷雾状态");
     if (room.phase !== "DAY") return sendError(response, 400, "当前阶段不能记录放逐投票");
+    if (room.activeDarkBallot?.status === "OPEN") return sendError(response, 400, "请先完成正在进行的手机投票");
     if (hasCurrentExileRecord(room)) return sendError(response, 400, "本日放逐结果已经确认");
     if (room.activeDaySkillWindow?.status === "OPEN") return sendError(response, 400, "请先关闭当前白天技能窗口");
     if (room.pendingExileResult) return sendError(response, 400, "请先处理定序王子的发动时机");
@@ -1416,53 +2022,86 @@ async function handleApi(request, response, url) {
   if (target.action === "wolf-self-destruct") {
     if (room.mode !== "SYSTEM") return sendError(response, 400, "自爆入口仅用于无法官模式");
     if (room.phase !== "DAY") return sendError(response, 400, "只能在白天阶段自爆");
-    if (room.pendingNightResolution || (room.pendingDelayedDeaths || []).some((item) => item.day === room.night) || (room.pendingDeathSkills || []).some((item) => item.day === room.night)) {
+    const interruptedSheriffElection = isSheriffSelfDestructWindowOpen(room);
+    if ((room.pendingNightResolution && !interruptedSheriffElection) || (room.pendingDelayedDeaths || []).some((item) => item.day === room.night) || (room.pendingDeathSkills || []).some((item) => item.day === room.night)) {
       return sendError(response, 400, "请先完成当前死亡结算");
+    }
+    if (room.activeDaySkillWindow?.status === "OPEN" || room.pendingExileResult || room.orderPrinceRevotePending || room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length) {
+      return sendError(response, 400, "请先完成当前技能窗口或重新投票");
     }
     if (room.systemDayOutcomeRecordedDay === room.night) return sendError(response, 400, "本日出局结果已经记录");
     const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
     const assignment = room.assignments.find((item) => item.seat === ownSeat);
-    if (!assignment || assignment.alive === false || assignment.roleId === "mixed_blood" || assignment.roleId === "mechanical_wolf" || (assignment.currentCamp || assignment.camp) !== "WOLF") {
-      return sendError(response, 403, "只有存活的狼人阵营玩家可以自爆");
+    if (!assignment || assignment.alive === false || ["mixed_blood", "mechanical_wolf", "lia"].includes(assignment.roleId) || (assignment.currentCamp || assignment.camp) !== "WOLF") {
+      return sendError(response, 403, "只有可自爆的存活狼人可以自爆");
     }
-    assignment.alive = false;
-    const record = addDeathRecord(room, {
-      day: room.night,
-      phase: "SELF_DESTRUCT",
-      seats: [ownSeat],
-      reasons: { [String(ownSeat)]: ["狼人自爆"] },
-      sourceAction: { kind: "SELF_DESTRUCT", seat: ownSeat },
-      resolutionOrder: 1
-    });
-    queueDeathSkills(room, [ownSeat], "SELF_DESTRUCT", record.reasons);
+    if (isDarkDestruction(room) && darkBindingTarget(room, room.night) === ownSeat) return sendError(response, 400, "被禁锢的狼人不能自爆");
+    if (room.activeDarkBallot?.status === "OPEN") {
+      room.abortedBallots = [...(room.abortedBallots || []), { ...room.activeDarkBallot, status: "CANCELLED", reason: "SELF_DESTRUCT" }];
+      room.activeDarkBallot = null;
+    }
+    let record;
+    if (interruptedSheriffElection) {
+      record = recordSheriffElectionSelfDestruct(room, ownSeat);
+    } else {
+      assignment.alive = false;
+      record = addDeathRecord(room, {
+        day: room.night,
+        phase: "SELF_DESTRUCT",
+        seats: [ownSeat],
+        reasons: { [String(ownSeat)]: ["狼人自爆"] },
+        sourceAction: { kind: "SELF_DESTRUCT", seat: ownSeat },
+        resolutionOrder: 1
+      });
+      queueDarkDeathResolution(room, [ownSeat], "SELF_DESTRUCT", record.reasons);
+      room.pendingSystemNightAfterSelfDestruct = true;
+      writeLog(room, "WOLF_SELF_DESTRUCTED", { seat: ownSeat, roleId: assignment.roleId });
+    }
     room.systemDayOutcomeRecordedDay = room.night;
-    room.pendingSystemNightAfterSelfDestruct = true;
-    writeLog(room, "WOLF_SELF_DESTRUCTED", { seat: ownSeat, roleId: assignment.roleId });
     const pendingSkill = (room.pendingDeathSkills || []).some((item) => item.day === room.night && item.seat === ownSeat);
-    addPublicAnnouncement(room, pendingSkill ? `${ownSeat}号玩家自爆，等待其发动死亡技能。` : `${ownSeat}号玩家自爆，天黑请闭眼。`);
+    if (!interruptedSheriffElection) addPublicAnnouncement(room, pendingSkill ? `${ownSeat}号玩家自爆，等待其发动死亡技能。` : `${ownSeat}号玩家自爆，天黑请闭眼。`);
     continueAfterSystemSelfDestruct(room);
     return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
   }
 
   if (target.action === "exile-record") {
+    if (isDarkDestruction(room) && room.mode !== "JUDGE") return sendError(response, 400, "暗黑破坏 2.0 无法官模式必须完成线上私密投票");
     if (!isController(room, judgeToken)) return sendError(response, 403, "只有控制设备可以记录放逐");
     if (room.phase !== "DAY") return sendError(response, 400, "当前阶段不能记录放逐");
+    if (room.activeDarkBallot?.status === "OPEN") return sendError(response, 400, "请先完成正在进行的手机投票");
     if (!hasCurrentDaybreakRecord(room)) return sendError(response, 400, "请先记录本日天亮死亡");
     if (hasCurrentExileRecord(room)) return sendError(response, 400, "本日放逐结果已经记录");
     if (room.activeDaySkillWindow?.status === "OPEN" || room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成白天技能窗口与投票流程");
     const seat = Number(body.seat || 0);
     const noExile = Boolean(body.noExile);
     if (!noExile && (seat < 1 || seat > 12)) return sendError(response, 400, "放逐座位不合法");
+    if (room.boardId === "realm_of_trickery") {
+      const actualSeat = noExile ? 0 : mapExileSeat(room, seat);
+      if (!noExile && (![seat, actualSeat].every((value) => room.assignments.some((item) => item.seat === value && item.alive !== false)))) return sendError(response, 400, "投票号码及换号后的目标必须存活");
+      const record = { day: room.night, round: 1, exiledSeat: seat, noExile, counts: {}, topSeats: seat ? [seat] : [], source: "DIRECT_EXILE", createdAt: Date.now() };
+      const firstRoundPending = !room.orderPrinceUsed && !(room.dayVoteRecord?.day === room.night && room.dayVoteRecord.round === 1 && room.dayVoteRecord.pkSeats?.length > 1);
+      if (firstRoundPending) {
+        room.pendingExileResult = { day: room.night, record, createdAt: Date.now() };
+        const princeSeat = room.assignments.find((item) => item.roleId === "order_prince" && item.alive !== false)?.seat || 0;
+        openDaySkillWindow(room, { id: `order-prince-rewind-${room.night}`, day: room.night, trigger: "AFTER_FIRST_DAY_VOTE", kind: "ORDER_PRINCE_REWIND", eligibleSeats: princeSeat ? [princeSeat] : [], action: "ACTIVATE_OR_DECLINE", resume: "DAY_VOTE_OR_EXILE", metadata: { rawExiledSeat: seat, tied: false } });
+        writeLog(room, "DAY_VOTE_PENDING", record);
+      } else {
+        room.dayVoteRecord = record;
+        finalizeDayVote(room, record, "DIRECT_EXILE");
+      }
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
     if (!noExile) {
       const assignment = room.assignments.find((item) => item.seat === seat);
       if (!assignment || assignment.alive === false) return sendError(response, 400, "放逐目标必须是存活玩家");
+      if (isDarkDestruction(room) && darkBindingTarget(room, room.night) === seat) return sendError(response, 400, "被禁锢玩家本日不能被放逐");
       assignment.alive = false;
       if (assignment.roleId === "idiot") assignment.publiclyRevealed = true;
       if (shouldStartTreasureMaskedFinalNight(room, assignment)) {
         room.treasureMaskedFinalNight = { seat, triggerDay: room.night, status: "PENDING", createdAt: Date.now() };
         writeLog(room, "TREASURE_MASK_FINAL_NIGHT_PENDING", room.treasureMaskedFinalNight);
       } else {
-        queueDeathSkills(room, [seat], "EXILE");
+        queueDarkDeathResolution(room, [seat], "EXILE");
       }
     }
     const record = {
@@ -1509,16 +2148,26 @@ async function handleApi(request, response, url) {
   }
 
   if (target.action === "night-start") {
-    if (!isController(room, judgeToken)) return sendError(response, 403, "只有控制设备可以开始夜晚");
+    const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
+    const canStartDayNextNight = room.phase === "DAY" && (
+      (room.mode === "JUDGE" && isJudge(room, judgeToken))
+      || (room.mode === "SYSTEM" && (isController(room, judgeToken) || ownSeat > 0))
+    );
+    if (room.phase !== "DAY" && !isController(room, judgeToken)) return sendError(response, 403, "只有控制设备可以开始第一夜");
+    if (room.phase === "DAY" && !canStartDayNextNight) return sendError(response, 403, "请由法官或已入座玩家进入下一夜");
     if (room.phase !== "DEALT" && room.phase !== "DAY") return sendError(response, 400, "当前阶段不能开始夜晚");
     if (room.phase === "DAY") {
-      if (room.activeDaySkillWindow?.status === "OPEN" || room.pendingExileResult || room.orderPrinceRevotePending) return sendError(response, 400, "请先完成白天技能窗口与投票流程");
-      if (room.mode === "SYSTEM" && room.systemDayOutcomeRecordedDay !== room.night) return sendError(response, 400, "请先记录本日最终出局结果");
-      if (room.mode === "JUDGE" && !hasCurrentDaybreakRecord(room)) return sendError(response, 400, "请先公布天亮死亡结果");
-      if (room.mode === "JUDGE" && !hasCurrentExileRecord(room)) return sendError(response, 400, "请先记录本日放逐结果");
-      if (room.pendingNightResolution) return sendError(response, 400, "请先确认天亮死亡名单");
+      if (room.activeDaySkillWindow?.status === "OPEN") return sendError(response, 400, "请先处理当前白天技能窗口");
+      if (room.pendingExileResult) return sendError(response, 400, "请先处理放逐结果与定序王子回溯窗口");
+      if (room.orderPrinceRevotePending) return sendError(response, 400, "请先完成回溯后的重新投票");
+      if (room.mode === "SYSTEM" && room.pendingNightResolution) return sendError(response, 400, "请先确认天亮死亡名单");
+      if (room.mode === "JUDGE" && !hasCurrentDaybreakRecord(room)) return sendError(response, 400, "请先宣布夜间死亡信息");
+      if (room.pendingArchangelRevival || (room.pendingDarkDeathQueue || []).length) return sendError(response, 400, "请先完成天使长复活与出局结算");
+      if (room.activeDarkBallot?.status === "OPEN") return sendError(response, 400, "请先结束暗黑私密投票");
       if ((room.pendingDelayedDeaths || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理蒙面人的延迟死亡");
       if ((room.pendingDeathSkills || []).some((item) => item.day === room.night)) return sendError(response, 400, "请先处理死亡技能");
+      if (room.mode === "SYSTEM" && room.systemDayOutcomeRecordedDay !== room.night) return sendError(response, 400, "请先记录本日最终出局结果或确认无人出局");
+      if (room.mode === "JUDGE" && !hasCurrentExileRecord(room)) return sendError(response, 400, "请先记录本日放逐对象或确认无人出局");
     }
     beginNight(room);
     return sendJson(response, 200, {
@@ -1526,12 +2175,39 @@ async function handleApi(request, response, url) {
     });
   }
 
+  if (target.action === "system-upgrade-flow") {
+    if (!isController(room, judgeToken) || room.mode !== "SYSTEM") return sendError(response, 403, "只有控制设备可以升级流程");
+    if (!["WAITING", "DEALT", "DAY"].includes(room.phase) || room.pendingNightResolution || room.pendingExileResult || room.activeDaySkillWindow || room.pendingArchangelRevival || (room.pendingDeathSkills || []).length || (room.pendingDelayedDeaths || []).length) return sendError(response, 409, "请先处理当前对局待办，不能在夜间升级");
+    room.fixedNightFlow = 1;
+    return sendJson(response, 200, {room: sanitizeRoom(room, {clientId, judgeToken})});
+  }
+  if (target.action === "system-day-voice") {
+    if (!isController(room, judgeToken) || !dayVoice.enabled(room) || room.phase !== "DAY") return sendError(response, 403, "只有当前控制设备可以确认技能播报");
+    try { dayVoice.control(room, body.operation, body.windowKey); }
+    catch(err) { return sendError(response, 409, err.message); }
+    return sendJson(response, 200, {room: sanitizeRoom(room, {clientId, judgeToken})});
+  }
+  if (target.action === "system-fixed-night") {
+    if (!isController(room, judgeToken) || !fixedNight.enabled(room) || room.phase !== "NIGHT") return sendError(response, 403, "只有当前控制设备可以推进夜间计时");
+    try { fixedNight.control(room, body.operation, body.stepKey); syncNightTargetResolutions(room, room.night); }
+    catch (err) { return sendError(response, 409, err.message); }
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+  }
+  if (target.action === "system-skill-timeout") {
+    if (room.mode !== "SYSTEM" || room.phase !== "DAY") return sendError(response, 400, "当前没有无法官白天技能窗口");
+    const ownSeat = room.seats.find((item) => item.clientId === clientId)?.seat || 0;
+    if (!isController(room, judgeToken) && !ownSeat) return sendError(response, 403, "请先入座后处理技能超时");
+    if (!expireSystemSkillWindow(room)) return sendError(response, 409, "技能窗口尚未超时或已被处理");
+    return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+  }
+
   if (target.action === "system-timeout-skip") {
+    if (fixedNight.enabled(room)) return sendError(response, 400, "固定流程不能强制跳过，请按计时推进");
     if (room.mode !== "SYSTEM" || !isController(room, judgeToken)) return sendError(response, 403, "只有公共控制设备可以处理超时");
     if (room.phase !== "NIGHT") return sendError(response, 400, "当前不在夜晚阶段");
     const step = room.currentNightSteps[room.currentNightStepIndex];
     if (!step) return sendError(response, 400, "夜间流程已完成");
-    if (["puppet_select", "mixed_blood_model"].includes(step.id)) return sendError(response, 400, "该系统步骤不可因超时跳过");
+    if (["puppet_select", "mixed_blood_model", "lia_raise", "lilith_bind", "lia_charge", "dreamer_dream", "cain_check"].includes(step.id)) return sendError(response, 400, "该系统步骤不可因超时跳过");
     if (!room.systemStepDeadlineAt || Date.now() < Number(room.systemStepDeadlineAt)) return sendError(response, 400, "当前步骤尚未超时");
     const actionRecord = {
       night: room.night,
@@ -1551,6 +2227,7 @@ async function handleApi(request, response, url) {
   }
 
   if (target.action === "night-action") {
+    if (fixedNight.enabled(room) && !fixedNight.actionable(room)) return sendError(response, 409, "当前步骤不能提交或已经确认");
     if (room.phase !== "NIGHT") return sendError(response, 400, "当前不在夜晚阶段");
     const step = room.currentNightSteps[room.currentNightStepIndex];
     if (!step) return sendError(response, 400, "夜间流程已完成");
@@ -1567,7 +2244,7 @@ async function handleApi(request, response, url) {
     if (step.id === "siren_wind") {
       const wind = body.windDirection;
       if (!["calm", "tailwind", "headwind"].includes(wind)) return sendError(response, 400, "风向不合法");
-      if (room.night > 1 && wind === room.lastWindDirection) return sendError(response, 400, "不可连续两晚选择相同风向");
+      if (room.night > 1 && wind === room.windDirection) return sendError(response, 400, "不可连续两晚选择相同风向");
       room.lastWindDirection = room.windDirection || "calm";
       room.windDirection = wind;
       const actionRecord = {
@@ -1639,8 +2316,12 @@ async function handleApi(request, response, url) {
       targetMapping: step.targetMapping ? { ...step.targetMapping, targetSeats: [...targetSeats] } : undefined,
       createdAt: Date.now()
     };
+    if (isDarkDestruction(room) && step.id === "lia_charge") {
+      actionRecord.success = !skipped && (room.assignments || []).some((assignment) => assignment.seat === targetSeats[0] && assignment.roleId === "villager");
+    }
     const privateResult = room.mode === "SYSTEM" ? buildPrivateNightResult(room, step, actionRecord) : null;
     room.nightActions.push(actionRecord);
+    if (isDarkDestruction(room) && step.id === "lia_fog" && !skipped) room.liaFogDay = room.night;
     if (step.id === "puppet_select" && targetSeats.length) room.puppetSeat = targetSeats[0];
     if (step.id === "captain_board" && targetSeats.length) {
       room.boardedSeat = targetSeats[0];
@@ -1656,7 +2337,11 @@ async function handleApi(request, response, url) {
       });
     }
     writeLog(room, "NIGHT_ACTION", actionRecord);
-    room.currentNightStepIndex += 1;
+    if (isDarkDestruction(room) && ["lilith_bind", "lia_charge"].includes(step.id)) {
+      rebuildNightStepsAfterDarkAction(room);
+    } else {
+      room.currentNightStepIndex += 1;
+    }
     scheduleSystemAnnouncement(room);
     return sendJson(response, 200, {
       room: sanitizeRoom(room, { clientId, judgeToken }),
@@ -1670,11 +2355,16 @@ async function handleApi(request, response, url) {
     const ownPrince = room.assignments.find((assignment) => assignment.seat === ownSeat && assignment.roleId === "order_prince" && assignment.alive !== false);
     if (target.action === "order-prince-activate" && !(room.mode === "SYSTEM" ? ownPrince : isJudge(room, judgeToken))) return sendError(response, 403, "只有存活的定序王子可以发动回溯");
     if (target.action === "order-prince-decline" && !(room.mode === "SYSTEM" ? systemController : isJudge(room, judgeToken))) return sendError(response, 403, "只有控制设备可以确认无人发动");
+    if (room.mode === "SYSTEM" && systemSkillDeadlineAt(room) && Date.now() >= systemSkillDeadlineAt(room)) {
+      expireSystemSkillWindow(room);
+      return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }) });
+    }
     if (room.boardId !== "realm_of_trickery" || !room.pendingExileResult) return sendError(response, 400, "当前没有待处理的定序王子时机");
     if (room.activeDaySkillWindow?.kind !== "ORDER_PRINCE_REWIND" || room.activeDaySkillWindow.status !== "OPEN") return sendError(response, 400, "当前白天技能窗口不可用");
     const pending = room.pendingExileResult;
     if (target.action === "order-prince-activate") {
       if (room.orderPrinceUsed) return sendError(response, 400, "定序王子已经发动过技能");
+      if (!room.assignments.some((item) => item.roleId === "order_prince" && item.alive !== false)) return sendError(response, 400, "定序王子已出局，不能发动回溯");
       room.orderPrinceUsed = true;
       room.orderPrinceRevotePending = true;
       room.pendingExileResult = null;
@@ -1706,9 +2396,17 @@ async function handleApi(request, response, url) {
       room.lastWindDirection = previousWind;
     }
     if (removed.stepId === "captain_board") room.boardedSeat = 0;
+    if (removed.stepId === "puppet_select") {
+      room.puppetSeat = [...room.nightActions].reverse()
+        .find((action) => action.stepId === "puppet_select")?.targetSeats?.[0] || 0;
+    }
+    if (removed.stepId === "lia_fog") {
+      room.liaFogDay = [...room.nightActions].reverse()
+        .find((action) => action.stepId === "lia_fog" && !action.skipped)?.night || 0;
+    }
     refreshSwapConflict(room, room.night);
     syncNightTargetResolutions(room, room.night);
-    room.currentNightStepIndex = Math.max(0, (room.currentNightStepIndex || 0) - 1);
+    rebuildNightStepsAfterUndo(room);
     startSystemStep(room);
     writeLog(room, "NIGHT_ACTION_UNDONE", { stepId: removed.stepId, label: removed.label, night: removed.night });
     return sendJson(response, 200, {
@@ -1756,11 +2454,13 @@ async function handleApi(request, response, url) {
       sourceAction: { kind: "NIGHT_RESOLUTION", night: room.night },
       resolutionOrder: 1
     });
-    queueDeathSkills(room, seats, "DAYBREAK", reasons);
     writeLog(room, "DAYBREAK_DEATHS_CONFIRMED", record);
     const announcement = seats.length ? `天亮了，昨夜${seats.map((seat) => `${seat}号`).join("、")}死亡。` : "天亮了，昨夜是平安夜。";
     addPublicAnnouncement(room, announcement);
-    maybeCompleteSystemGame(room);
+    const boomSeat = Number(room.pendingSheriffSelfDestructSeat || 0);
+    queueDarkDeathResolution(room, seats.filter((seat) => seat !== boomSeat), "DAYBREAK", reasons);
+    if (boomSeat) queueDarkDeathResolution(room, [boomSeat], "SELF_DESTRUCT", { [String(boomSeat)]: ["狼人自爆"] });
+    if (!continueAfterSystemSelfDestruct(room)) maybeCompleteSystemGame(room);
     return sendJson(response, 200, { room: sanitizeRoom(room, { clientId, judgeToken }), announcement });
   }
 

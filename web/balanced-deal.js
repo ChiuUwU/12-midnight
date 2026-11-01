@@ -9,7 +9,8 @@
   const HISTORY_LIMIT = 10;
   const DEFAULT_CANDIDATE_COUNT = 2000;
   const TEMPERATURE = 3;
-  const FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT = 8;
+  const FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT = 2;
+  const FOLLOW_NEIGHBOR_GOD_EXCESS_WEIGHT = 3;
   const TREASURE_MASTER_MEDIAN_PENALTY_WEIGHT = 0.45;
   const TREASURE_MASTER_WOLF_TOLERANCE_RATIO = 0.08;
   const TREASURE_MASTER_WOLF_SEVERE_RATIO = 0.16;
@@ -251,6 +252,7 @@
     const followNeighborStats = boardId === "follow_neighbor" ? getFollowNeighborStats(assignments) : null;
     const adjacentGodPenalty = followNeighborStats
       ? FOLLOW_NEIGHBOR_GOD_SHORTFALL_WEIGHT * Math.pow(Math.max(0, 2 - followNeighborStats.adjacentGodCount), 2)
+        + FOLLOW_NEIGHBOR_GOD_EXCESS_WEIGHT * Math.max(0, followNeighborStats.adjacentGodCount - 2)
       : 0;
 
     return {

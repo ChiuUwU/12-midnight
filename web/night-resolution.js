@@ -29,6 +29,15 @@
     return (room.assignments || []).some((assignment) => assignment.seat === Number(room.puppetSeat) && assignment.roleId === roleId);
   }
 
+  function isDarkDestruction(room) {
+    return room.boardId === "dark_destruction_2";
+  }
+
+  function getDarkBindingTarget(room, night) {
+    const action = (room.nightActions || []).find((item) => item.night === night && item.stepId === "lilith_bind" && !item.skipped);
+    return Number(action?.targetSeats?.[0] || 0);
+  }
+
   function calculateNightResolution(room, night = room.night) {
     const actions = (room.nightActions || []).filter((item) => item.night === night);
     const previousActions = (room.nightActions || []).filter((item) => item.night === night - 1);
@@ -68,6 +77,11 @@
     const danceSeats = danceAction?.targetSeats?.map(Number) || [];
     const maskSeat = firstTarget("mask_give");
     const dancerSeat = (room.assignments || []).find((item) => item.roleId === "dancer")?.seat || 0;
+    const darkProtectedSeat = isDarkDestruction(room) ? getDarkBindingTarget(room, night) : 0;
+    for (let index=dreamSources.length-1; index>=0; index--) {
+      if (darkProtectedSeat && dreamSources[index].seat === darkProtectedSeat) dreamSources.splice(index,1);
+    }
+    const archangelBlessSeat = firstTarget("archangel_bless");
 
     // 傀儡仍能完成界面操作并消耗药剂，但结算时静默失效。
     if (isFollowNeighborPuppet(room, "witch")) {
@@ -95,6 +109,9 @@
     dreamSources.forEach((source) => {
       if (source.previousTarget && source.target === source.previousTarget) addDeath(source.target, "连续摄梦");
     });
+    if (isDarkDestruction(room) && archangelBlessSeat && roleAtSeat(archangelBlessSeat) === "lilith") {
+      addDeath(archangelBlessSeat, "天使长祝福");
+    }
 
     if (danceSeats.length === 3) {
       const effectiveCamp = (seat) => {
@@ -174,6 +191,12 @@
 
     if (treasureRole === "wolf") addDeath(treasureTarget, "盗宝技能刀");
 
+    if (darkProtectedSeat && deaths.has(darkProtectedSeat)) {
+      const reasons = deaths.get(darkProtectedSeat).filter((reason) => reason === "天使长祝福");
+      if (reasons.length) deaths.set(darkProtectedSeat, reasons);
+      else deaths.delete(darkProtectedSeat);
+    }
+
     const delayedDeaths = [];
     [...deaths.entries()].forEach(([seat, reasons]) => {
       const isTreasureMasked = roleAtSeat(seat) === "treasure_master"
@@ -196,7 +219,7 @@
   const GOD_ROLE_IDS = new Set([
     "seer", "witch", "hunter", "idiot", "guard", "dancer",
     "spirit_medium", "poisoner", "dreamer", "magician", "order_prince",
-    "captain", "masked_man"
+    "captain", "masked_man", "archangel", "cain"
   ]);
   const CIVILIAN_ROLE_IDS = new Set(["villager", "mixed_blood"]);
 
@@ -237,14 +260,19 @@
     const assignment = (room.assignments || []).find((item) => item.seat === Number(seat));
     const skillRoleId = effectiveDeathSkillRole(room, seat, day);
     if (!assignment || !skillRoleId) return null;
+    if (isDarkDestruction(room) && phase !== "DAYBREAK" && getDarkBindingTarget(room, day) === Number(seat)) {
+      return { seat, skillRoleId, eligible: false, reason: "被禁锢时不能发动白天技能", day };
+    }
 
     const normalizedReasons = Array.isArray(reasons) ? reasons.map(String) : [];
     const poisonDeath = normalizedReasons.some((reason) => reason.includes("毒"));
+    const dreamDeath = normalizedReasons.some((reason) => reason.includes("摄梦") || reason.includes("连续摄梦"));
     const knifeDeath = normalizedReasons.some((reason) => reason === "狼刀" || reason === "同守同救" || reason.includes("技能刀"));
     const triggerAllowed = phase === "EXILE"
       || (phase === "DAYBREAK" && knifeDeath)
       || (phase === "SELF_DESTRUCT" && skillRoleId !== "hunter");
     if (poisonDeath) return { seat, skillRoleId, eligible: false, reason: "被毒杀不能发动死亡技能", day };
+    if (assignment.roleId === "wolf_king" && dreamDeath) return { seat, skillRoleId, eligible: false, reason: "被摄梦效果致死不能发动死亡技能", day };
     if (!triggerAllowed) return { seat, skillRoleId, eligible: false, reason: "当前出局方式不能发动死亡技能", day };
 
     if (room.boardId === "follow_neighbor" && assignment.roleId === "hunter" && Number(room.puppetSeat) === Number(seat)) {
