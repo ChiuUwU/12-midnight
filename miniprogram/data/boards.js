@@ -159,6 +159,24 @@ const BOARDS = [
         puppetSeerReadsAsWolf: true
       }
     }
+  },
+  {
+    id: "dark_destruction_2",
+    name: "暗黑破坏2.0",
+    playerCount: 12,
+    roles: [
+      { roleId: "archangel", count: 1, camp: "GOOD" },
+      { roleId: "cain", count: 1, camp: "GOOD" },
+      { roleId: "witch", count: 1, camp: "GOOD" },
+      { roleId: "dreamer", count: 1, camp: "GOOD" },
+      { roleId: "villager", count: 4, camp: "GOOD" },
+      { roleId: "wolf", count: 1, camp: "WOLF" },
+      { roleId: "wolf_king", count: 1, camp: "WOLF" },
+      { roleId: "lilith", count: 1, camp: "WOLF" },
+      { roleId: "lia", count: 1, camp: "WOLF" }
+    ],
+    summary: "天使长 · 凯恩 · 女巫 · 摄梦人 · 平民×4 · 狼人 · 狼王 · 莉莉丝 · 莉娅",
+    globalRules: DEFAULT_RULES
   }
 ];
 

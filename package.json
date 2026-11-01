@@ -5,6 +5,9 @@
   "description": "十二点天黑：狼人杀发牌和法官流程辅助网页工具",
   "scripts": {
     "start": "node server.js",
+    "build": "node scripts/build-rulebook.js",
+    "build:rulebook": "node scripts/build-rulebook.js",
+    "watch:rulebook": "node scripts/build-rulebook.js --watch",
     "test": "node --test tests/*.test.js"
   },
   "engines": {

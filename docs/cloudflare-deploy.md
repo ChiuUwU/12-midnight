@@ -1,5 +1,7 @@
 # Cloudflare 免费部署
 
+> 文档定位：保留原有部署步骤供核对。下方“构建命令留空”是早期配置说明；当前网页规则由 Markdown 生成，发布前必须按 [规则编辑说明](./rulebook-editing.md) 检查现有构建命令和生成数据，不能直接覆盖既有配置。生产部署状态以 Cloudflare 实际记录为准。
+
 目标：用 Cloudflare Pages 托管网页，用 Pages Functions 提供 `/api/rooms`，用 D1 保存房间。这样电脑和手机不需要在同一个 Wi-Fi，也不需要一直开着本地 `cmd`。
 
 ## 这次新增的文件

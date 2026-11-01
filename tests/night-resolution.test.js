@@ -207,6 +207,26 @@ test("backend keeps explicit reasons private and stores authoritative fallback r
   assert.equal(publicRoom.room.pendingNightResolution, null);
 });
 
+test("judge sheriff self-destruct preserves and announces the same wolf's night death", async () => {
+  const clientId = `judge-boom-${Date.now()}-${crypto.randomInt(10000)}`;
+  const created = await post("/api/rooms", { clientId, boardId: "mechanical_wolf_spirit_medium" });
+  const id = created.body.room.id;
+  const auth = { clientId, judgeToken: created.body.judgeToken };
+  await post(`/api/rooms/${id}/fill-test`, auth);
+  const dealt = await post(`/api/rooms/${id}/deal`, auth);
+  const wolfSeat = dealt.body.room.assignments.find((item) => item.roleId === "wolf" && item.seat !== 8).seat;
+  await runMechanicalNight(id, clientId, auth.judgeToken, { wolfTarget: wolfSeat });
+  const boom = await post(`/api/rooms/${id}/sheriff-election-self-destruct`, { ...auth, seat: wolfSeat });
+  assert.equal(boom.status, 200);
+  assert.equal(boom.body.room.phase, "DAY");
+  assert.equal((await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [] })).status, 400);
+  const announced = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [wolfSeat] });
+  assert.equal(announced.status, 200);
+  assert.equal(announced.body.room.phase, "NIGHT");
+  assert.equal(announced.body.room.night, 2);
+  assert.ok(announced.body.room.deathRecords.some((record) => record.phase === "DAYBREAK" && record.seats.includes(wolfSeat)));
+});
+
 test("judge mode requires death and exile records, but not optional sheriff records", async () => {
   const clientId = `judge-day-${Date.now()}-${crypto.randomInt(10000)}`;
   const created = await post("/api/rooms", { clientId, boardId: "mechanical_wolf_spirit_medium" });
@@ -220,10 +240,12 @@ test("judge mode requires death and exile records, but not optional sheriff reco
 
   let started = await post(`/api/rooms/${id}/night-start`, auth);
   assert.equal(started.status, 400);
+  assert.match(started.body.error, /宣布夜间死亡信息/);
   const death = await post(`/api/rooms/${id}/death-record`, { ...auth, seats: [wolfTarget] });
   assert.equal(death.status, 200);
   started = await post(`/api/rooms/${id}/night-start`, auth);
   assert.equal(started.status, 400);
+  assert.match(started.body.error, /记录本日放逐对象/);
   const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, noExile: true });
   assert.equal(exile.status, 200);
   started = await post(`/api/rooms/${id}/night-start`, auth);

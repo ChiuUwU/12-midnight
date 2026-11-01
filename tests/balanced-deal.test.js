@@ -124,7 +124,26 @@ test("Follow Neighbor keeps every wolf layout legal and scores unique adjacent g
   assert.ok(result.meta.components.adjacentGodPenalty >= 0);
 });
 
-test("Follow Neighbor deal average stays in the agreed two-to-three adjacent-god range", () => {
+test("Follow Neighbor plan B assigns exact soft penalties to each adjacent-god count", () => {
+  const zeroMatrix = Array.from({ length: 12 }, () => Array(12).fill(0));
+  const context = { skills: Array(12).fill(50), wolfTarget: { value: 0 }, referenceWolves: new Set(),
+    pairOppositeCounts: zeroMatrix, pairWolfWolfCounts: zeroMatrix, pairHistoryLength: 0,
+    targetOppositeRate: 0, targetWolfWolfRate: 0, keyRoleMode: { coefficient: 0, threshold: 0 } };
+  const gods = ["seer", "witch", "guard", "hunter"];
+  for (let count = 0; count <= 4; count += 1) {
+    const wolves = count <= 2 ? [1, 2, 3] : [1, 5, 9];
+    const adjacent = count <= 2 ? [4, 12] : [2, 4, 6, 8, 10, 12];
+    const remaining = seats.filter((seat) => !wolves.includes(seat) && !adjacent.includes(seat));
+    const godSeats = [...adjacent.slice(0, count), ...remaining.slice(0, 4 - count)];
+    const assignments = seats.map((seat) => wolves.includes(seat)
+      ? { seat, roleId: seat === wolves[0] ? "wolf_king" : "wolf", camp: "WOLF" }
+      : { seat, roleId: godSeats.includes(seat) ? gods[godSeats.indexOf(seat)] : "villager", camp: "GOOD" });
+    assert.equal(getFollowNeighborStats(assignments).adjacentGodCount, count);
+    assert.equal(scoreCandidate(assignments, "follow_neighbor", [], context).components.adjacentGodPenalty, [8, 2, 0, 3, 6][count]);
+  }
+});
+
+test("Follow Neighbor plan B keeps the simulated average within a broad regression range", () => {
   let history = [];
   const counts = [];
   for (let index = 0; index < 100; index += 1) {
@@ -133,5 +152,5 @@ test("Follow Neighbor deal average stays in the agreed two-to-three adjacent-god
     counts.push(result.meta.followNeighbor.adjacentGodCount);
   }
   const average = counts.reduce((sum, value) => sum + value, 0) / counts.length;
-  assert.ok(average >= 2 && average <= 3, `adjacent God average was ${average}`);
+  assert.ok(average >= 1.6 && average <= 2.7, `adjacent God average was ${average}`);
 });
