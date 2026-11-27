@@ -17,14 +17,21 @@ async function post(route, body) {
       body: JSON.stringify(body)
     });
   } catch (error) {
+    if (server && server.exitCode === null && server.signalCode === null) {
+      await Promise.race([
+        new Promise((resolve) => server.once("exit", resolve)),
+        new Promise((resolve) => setTimeout(resolve, 200))
+      ]);
+    }
     throw new Error(`POST ${route} failed: ${error.cause?.code || error.message}; server exit=${server?.exitCode}, signal=${server?.signalCode}`, { cause: error });
   }
   return { status: response.status, body: await response.json() };
 }
 
 async function getRoom(id, clientId, judgeToken = "") {
-  const query = new URLSearchParams({ clientId, judgeToken });
-  return (await (await fetch(`${baseUrl}/api/rooms/${id}?${query}`)).json()).room;
+  const headers = { "X-Client-Id": clientId };
+  if (judgeToken) headers.Authorization = `Bearer ${judgeToken}`;
+  return (await (await fetch(`${baseUrl}/api/rooms/${id}`, { headers })).json()).room;
 }
 
 async function createSystemRoom(suffix, boardId = "pre_witch_hunter_idiot_mixed") {
@@ -93,6 +100,54 @@ test.before(async () => {
 
 test.after(() => {
   if (server) server.kill();
+});
+
+test("static server rejects Windows separator traversal outside web root", async () => {
+  const response = await fetch(`${baseUrl}/foo/%2e%2e%5c%2e%2e%5cweb-leak/secret.txt`);
+  assert.equal(response.status, 403);
+});
+
+test("local game result does not claim success when history persistence fails", async () => {
+  const isolatedPort = crypto.randomInt(50001, 60000);
+  const isolatedUrl = `http://127.0.0.1:${isolatedPort}`;
+  const code = "const fs = require('node:fs'); const read = fs.readFileSync, write = fs.writeFileSync, rename = fs.renameSync; let attempts = 0, staged = ''; fs.readFileSync = function(file, ...args) { if (String(file).endsWith('game_history.json')) { const error = new Error('missing test history'); error.code = 'ENOENT'; throw error; } return read.call(this, file, ...args); }; fs.writeFileSync = function(file, data, ...args) { if (String(file).includes('game_history.json.') && String(file).endsWith('.tmp')) { if (attempts++ === 0) throw new Error('simulated write failure'); staged = data; return; } return write.call(this, file, data, ...args); }; fs.renameSync = function(source, target) { if (String(target).endsWith('game_history.json')) { if (!staged) throw new Error('missing staged history'); return; } return rename.call(this, source, target); }; require('node:http').createServer(require('./server.js').createRoomService().handleRequest).listen(Number(process.env.PORT), process.env.HOST);";
+  const isolatedServer = spawn(process.execPath, ["-e", code], {
+    cwd: path.join(__dirname, ".."),
+    env: { ...process.env, PORT: String(isolatedPort), HOST: "127.0.0.1" },
+    stdio: "ignore"
+  });
+  try {
+    let ready = false;
+    for (let attempt = 0; attempt < 50; attempt += 1) {
+      try { ready = (await fetch(isolatedUrl)).ok; } catch {}
+      if (ready) break;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(ready, "isolated server did not start");
+    const created = await (await fetch(`${isolatedUrl}/api/rooms`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: "result-test-controller", mode: "JUDGE", boardId: "pre_witch_hunter_idiot_mixed" })
+    })).json();
+    const response = await fetch(`${isolatedUrl}/api/rooms/${created.room.id}/game-result`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: "result-test-controller", judgeToken: created.judgeToken, result: "GOOD_WIN" })
+    });
+    assert.equal(response.status, 500);
+    assert.notEqual((await response.json()).saved, true);
+    const retry = await fetch(`${isolatedUrl}/api/rooms/${created.room.id}/game-result`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: "result-test-controller", judgeToken: created.judgeToken, result: "GOOD_WIN" })
+    });
+    assert.equal(retry.status, 200);
+    assert.equal((await retry.json()).saved, true);
+    const duplicate = await fetch(`${isolatedUrl}/api/rooms/${created.room.id}/game-result`, {
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ clientId: "result-test-controller", judgeToken: created.judgeToken, result: "GOOD_WIN" })
+    });
+    assert.equal(duplicate.status, 400);
+  } finally {
+    isolatedServer.kill();
+  }
 });
 
 test("system mode keeps roles private and lets only the current role act", async () => {
@@ -764,7 +819,8 @@ test("all complex boards can complete two system-guided nights", async () => {
     let danceSeats = [];
 
     async function runNight(nightNumber) {
-      assert.equal((await post(`/api/rooms/${id}/night-start`, controllerAuth)).status, 200);
+      const started = await post(`/api/rooms/${id}/night-start`, controllerAuth);
+      assert.equal(started.status, 200, `${boardId}/night${nightNumber}: ${started.body.error || "unknown error"}`);
       const stepIds = [];
       while (true) {
         const controllerRoom = await getRoom(id, controllerId, token);
@@ -795,7 +851,7 @@ test("all complex boards can complete two system-guided nights", async () => {
           .filter((seat) => Boolean(seat) && (step.id !== "dreamer_dream" || seat !== actorSeat));
         let payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false };
         if (step.id === "wolves_kill") payload.skipped = true;
-        else if (step.id === "poisoner_poison" && boardId === "treasure_master" && nightNumber === 1) payload.targetSeats = [candidates[0]];
+        else if (step.id === "poisoner_poison" && boardId === "treasure_master" && nightNumber === 1) payload.targetSeats = [roleSeat("villager")];
         else if (["poisoner_poison", "mechanical_poison", "mechanical_kill"].includes(step.id)) payload.skipped = true;
         else if (step.id === "witch_action") payload = { clientId: actor.player.clientId, antidoteUsed: false, poisonTargetSeat: 0 };
         else if (step.id === "siren_wind") payload = { clientId: actor.player.clientId, targetSeats: [], skipped: false, windDirection: nightNumber === 1 ? "calm" : "tailwind" };

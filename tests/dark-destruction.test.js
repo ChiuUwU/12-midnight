@@ -19,8 +19,9 @@ async function post(route, body) {
 }
 
 async function getRoom(id, clientId, judgeToken = "") {
-  const query = new URLSearchParams({ clientId, judgeToken });
-  return (await (await fetch(`${baseUrl}/api/rooms/${id}?${query}`)).json()).room;
+  const headers = { "X-Client-Id": clientId };
+  if (judgeToken) headers.Authorization = `Bearer ${judgeToken}`;
+  return (await (await fetch(`${baseUrl}/api/rooms/${id}`, { headers })).json()).room;
 }
 
 test.before(async () => {
@@ -102,7 +103,7 @@ test("judge night flow blocks a bound witch or archangel without blocking the wo
     assert.equal(result.status, 200);
     const steps = result.body.room.currentNightSteps.map((step) => step.id);
     assert.ok(steps.includes("wolves_kill"));
-    if (omitted) assert.ok(!steps.includes(omitted), `${role} should not act while bound`);
+    if (omitted) assert.equal(result.body.room.currentNightSteps.find(s=>s.id===omitted)?.inactive,true,`${role} keeps its cue but cannot act while bound`);
     if (role !== "wolf") assert.equal((await post(`/api/rooms/${id}/night-undo`, auth)).status, 200);
   }
   let room = await getRoom(id, clientId, auth.judgeToken);

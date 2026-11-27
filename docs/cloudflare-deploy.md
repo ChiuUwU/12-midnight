@@ -35,7 +35,7 @@ npx wrangler d1 execute 12-midnight --file=./db/schema.sql --remote
 
 7. 重新部署 Pages。
 
-以后 `db/schema.sql` 增加表或索引时，应在发布新代码前重新执行第 5 步。当前 Function 会在首次记录对局结果时自动补建 `game_results` 表，但预先执行完整 schema 仍是推荐流程。
+以后 `db/schema.sql` 增加表或索引时，应在发布新代码前重新执行第 5 步。Pages Functions 不会在请求处理中自动建表；发牌历史、结果和管理员归档所需表都必须预先通过完整 schema 初始化。
 
 ## 发布与缓存规范
 

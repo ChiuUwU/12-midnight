@@ -15,7 +15,7 @@ function loadFunction(relative) {
 class SQLiteD1 {
   constructor() {
     this.db = new DatabaseSync(":memory:");
-    this.db.exec("CREATE TABLE rooms (id TEXT PRIMARY KEY, data TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
+    this.db.exec(fs.readFileSync(path.resolve(__dirname, "../db/schema.sql"), "utf8"));
   }
   prepare(sql) {
     const database = this.db;

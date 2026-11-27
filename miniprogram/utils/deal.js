@@ -1,10 +1,6 @@
 const { getBoard } = require("../data/boards");
 const crypto = require("crypto");
 
-function clone(value) {
-  return JSON.parse(JSON.stringify(value));
-}
-
 function flattenEntries(entries) {
   const cards = [];
   entries.forEach((entry) => {
@@ -98,7 +94,7 @@ function assignCards(seats, cards) {
 }
 
 function dealBoard(boardId, seats) {
-  const board = clone(getBoard(boardId));
+  const board = getBoard(boardId);
   if (!board) {
     throw new Error("版型不存在");
   }

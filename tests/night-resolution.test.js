@@ -57,7 +57,8 @@ async function runMechanicalNight(id, clientId, judgeToken, { wolfTarget = 3, po
     if (!step) break;
     const villagerSeat = room.assignments.find((item) => item.roleId === "villager" && item.alive !== false)?.seat || 1;
     let payload = { ...auth, targetSeats: [], skipped: false };
-    if (step.id === "guard_guard") payload.targetSeats = [room.night === 1 ? 8 : 9];
+    if (step.inactive) payload.skipped = true;
+    else if (step.id === "guard_guard") payload.targetSeats = [room.night === 1 ? 8 : 9];
     else if (step.id === "wolves_kill") payload.targetSeats = [wolfTarget];
     else if (step.id === "witch_action") payload = { ...auth, antidoteUsed: useAntidote, poisonTargetSeat: poisonSeat };
     else if (["mechanical_guard", "mechanical_poison", "mechanical_kill"].includes(step.id)) payload.skipped = true;
@@ -100,6 +101,9 @@ test("daily records reject duplicates and dead exile targets; ballots count each
   assert.equal((await post(`/api/rooms/${id}/exile-record`, { ...auth, seat: 3, noExile: false })).status, 400);
 
   assert.equal((await post(`/api/rooms/${id}/sheriff-candidates`, { ...auth, seats: [1, 2, 4] })).status, 200);
+  assert.equal((await post(`/api/rooms/${id}/sheriff-vote`, {
+    ...auth, round: 1, votes: [{ voterSeat: 99, targetSeat: 1 }]
+  })).status, 400);
   let sheriff = await post(`/api/rooms/${id}/sheriff-vote`, {
     ...auth,
     round: 1,
@@ -107,8 +111,7 @@ test("daily records reject duplicates and dead exile targets; ballots count each
       { voterSeat: 5, targetSeat: 1 },
       { voterSeat: 6, targetSeat: 2 },
       { voterSeat: 5, targetSeat: 2 },
-      { voterSeat: 3, targetSeat: 1 },
-      { voterSeat: 99, targetSeat: 1 }
+      { voterSeat: 3, targetSeat: 1 }
     ]
   });
   assert.equal(sheriff.status, 200);
@@ -128,6 +131,9 @@ test("daily records reject duplicates and dead exile targets; ballots count each
   assert.equal(sheriff.body.room.sheriffVoteRecord.counts[1], 9);
   assert.equal(sheriff.body.room.sheriffVoteRecord.votes.length, 9);
 
+  assert.equal((await post(`/api/rooms/${id}/day-vote`, {
+    ...auth, round: 1, votes: [{ voterSeat: 6, targetSeat: 99 }]
+  })).status, 400);
   let dayVote = await post(`/api/rooms/${id}/day-vote`, {
     ...auth,
     round: 1,
@@ -135,9 +141,7 @@ test("daily records reject duplicates and dead exile targets; ballots count each
       { voterSeat: 4, targetSeat: 1 },
       { voterSeat: 5, targetSeat: 2 },
       { voterSeat: 4, targetSeat: 2 },
-      { voterSeat: 3, targetSeat: 1 },
-      { voterSeat: 99, targetSeat: 2 },
-      { voterSeat: 6, targetSeat: 99 }
+      { voterSeat: 3, targetSeat: 1 }
     ]
   });
   assert.equal(dayVote.status, 200);
@@ -202,7 +206,7 @@ test("backend keeps explicit reasons private and stores authoritative fallback r
   assert.deepEqual(record.reasons, { "7": ["custom"], "9": ["女巫毒"] });
   assert.equal(recorded.body.room.pendingNightResolution, null);
 
-  const publicRoom = await (await fetch(`${baseUrl}/api/rooms/${id}?clientId=player`)).json();
+  const publicRoom = await (await fetch(`${baseUrl}/api/rooms/${id}`, { headers: { "X-Client-Id": "player" } })).json();
   assert.equal(Object.hasOwn(publicRoom.room.deathRecords.at(-1), "reasons"), false);
   assert.equal(publicRoom.room.pendingNightResolution, null);
 });
@@ -291,7 +295,7 @@ test("backend resolves hunter shot and publishes an exiled idiot", async () => {
 
   const exile = await post(`/api/rooms/${id}/exile-record`, { ...auth, seat: idiotSeat, noExile: false });
   assert.equal(exile.status, 200);
-  const publicRoom = await (await fetch(`${baseUrl}/api/rooms/${id}?clientId=observer`)).json();
+  const publicRoom = await (await fetch(`${baseUrl}/api/rooms/${id}`, { headers: { "X-Client-Id": "observer" } })).json();
   assert.deepEqual(publicRoom.room.publicReveals, [{ seat: idiotSeat, roleId: "idiot" }]);
 });
 

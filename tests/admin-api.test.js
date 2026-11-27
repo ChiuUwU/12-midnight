@@ -15,7 +15,11 @@ class AdminMemoryD1 {
       values: [],
       bind(...values) { this.values = values; return this; },
       async run() {
-        if (sql.startsWith("CREATE TABLE")) return { meta: { changes: 0 } };
+        if (sql.startsWith("DELETE FROM admin_login_attempts WHERE window_started_at")) {
+          const [cutoff] = this.values;
+          for (const [key, attempt] of db.attempts) if (attempt.at <= cutoff) db.attempts.delete(key);
+          return { meta: { changes: 1 } };
+        }
         if (sql.startsWith("INSERT INTO admin_login_attempts")) {
           const [key, now, cutoff] = this.values;
           const previous = db.attempts.get(key);
@@ -38,11 +42,12 @@ class AdminMemoryD1 {
   }
 }
 
-async function request(env, pathname, { method = "GET", body, cookie, ip = "203.0.113.10" } = {}) {
+async function request(env, pathname, { method = "GET", body, rawBody, cookie, ip = "203.0.113.10" } = {}) {
   const headers = { "CF-Connecting-IP": ip };
   if (cookie) headers.Cookie = cookie;
-  if (body) headers["Content-Type"] = "application/json";
-  const response = await (await handler)({ env, request: new Request(`https://example.test${pathname}`, { method, headers, body: body ? JSON.stringify(body) : undefined }) });
+  if (body || rawBody !== undefined) headers["Content-Type"] = "application/json";
+  const requestBody = rawBody !== undefined ? rawBody : body ? JSON.stringify(body) : undefined;
+  const response = await (await handler)({ env, request: new Request(`https://example.test${pathname}`, { method, headers, body: requestBody }) });
   return { status: response.status, cookie: response.headers.get("Set-Cookie"), body: await response.json() };
 }
 
@@ -63,4 +68,12 @@ test("admin API is fail-closed, password protected, rate-limited and returns onl
   assert.equal((await request(env, "/api/admin/archives", { cookie })).body.archives.length, 1);
   assert.equal((await request(env, `/api/admin/archives/${archiveId}`, { cookie })).body.archive.assignments[0].roleId, "wolf");
   assert.equal((await request(env, "/api/admin/archives", { cookie: `${cookie}x` })).status, 401);
+});
+
+test("admin login rejects non-object and oversized request bodies", async () => {
+  const env = { DB: new AdminMemoryD1(), ADMIN_PASSWORD: "test-strong-password-123" };
+  const nonObject = await request(env, "/api/admin/login", { method: "POST", rawBody: "null", ip: "203.0.113.20" });
+  assert.equal(nonObject.status, 400);
+  const tooLarge = await request(env, "/api/admin/login", { method: "POST", rawBody: " ".repeat(2049), ip: "203.0.113.21" });
+  assert.equal(tooLarge.status, 413);
 });

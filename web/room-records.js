@@ -3,6 +3,13 @@
   if (typeof module === "object" && module.exports) module.exports = api;
   root.RoomRecords = api;
 })(typeof globalThis !== "undefined" ? globalThis : this, function () {
+  function isValidVoteInput(votes) {
+    return votes === undefined || (Array.isArray(votes) && votes.length <= 12 && votes.every((vote) =>
+      vote && typeof vote === "object" && !Array.isArray(vote)
+      && Number.isInteger(vote.voterSeat) && vote.voterSeat >= 1 && vote.voterSeat <= 12
+      && Number.isInteger(vote.targetSeat) && vote.targetSeat >= 0 && vote.targetSeat <= 12));
+  }
+
   function ensure(room) {
     room.privateEvents = Array.isArray(room.privateEvents) ? room.privateEvents : [];
     room.daySkillWindowRecords = Array.isArray(room.daySkillWindowRecords) ? room.daySkillWindowRecords : [];
@@ -117,7 +124,18 @@
   function daySkillWindowForViewer(room, { judge = false, controller = false, seat = 0 } = {}) {
     const window = room.activeDaySkillWindow;
     if (!window || window.status !== "OPEN") return null;
-    if (judge || controller) return window;
+    if (judge) return window;
+    if (controller) return {
+      id: window.id,
+      day: window.day,
+      trigger: window.trigger,
+      kind: window.kind,
+      action: window.action,
+      resume: window.resume,
+      status: window.status,
+      deadlineAt: window.deadlineAt,
+      createdAt: window.createdAt
+    };
     return window.eligibleSeats.includes(Number(seat)) ? {
       id: window.id,
       day: window.day,
@@ -130,6 +148,7 @@
   }
 
   return {
+    isValidVoteInput,
     ensure,
     recordPrivateEvent,
     privateEventsForViewer,

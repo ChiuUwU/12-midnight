@@ -2,6 +2,14 @@ const COOKIE = "lastnight_admin";
 const WINDOW_MS = 5 * 60 * 1000;
 const SESSION_MS = 30 * 60 * 1000;
 const encoder = new TextEncoder();
+const MAX_LOGIN_BODY_BYTES = 2048;
+
+class RequestBodyError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function respond(body, status = 200, extraHeaders = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store", ...extraHeaders } });
@@ -44,10 +52,41 @@ async function countAttempt(env, request) {
   if (!ip) return null;
   const key = base64url(await digest(ip));
   const now = Date.now();
-  await env.DB.prepare("CREATE TABLE IF NOT EXISTS admin_login_attempts (id TEXT PRIMARY KEY, window_started_at INTEGER NOT NULL, attempts INTEGER NOT NULL)").run();
+  await env.DB.prepare("DELETE FROM admin_login_attempts WHERE window_started_at <= ?").bind(now - WINDOW_MS).run();
   await env.DB.prepare("INSERT INTO admin_login_attempts (id, window_started_at, attempts) VALUES (?, ?, 1) ON CONFLICT(id) DO UPDATE SET attempts = CASE WHEN window_started_at <= ? THEN 1 ELSE attempts + 1 END, window_started_at = CASE WHEN window_started_at <= ? THEN excluded.window_started_at ELSE window_started_at END").bind(key, now, now - WINDOW_MS, now - WINDOW_MS).run();
   const row = await env.DB.prepare("SELECT attempts FROM admin_login_attempts WHERE id = ?").bind(key).first();
   return { key, attempts: Number(row?.attempts || 0) };
+}
+
+async function readLoginBody(request) {
+  if (!request.body) return {};
+  const contentLength = request.headers.get("Content-Length");
+  if (contentLength !== null && Number(contentLength) > MAX_LOGIN_BODY_BYTES) throw new RequestBodyError("请求过长", 413);
+  const reader = request.body.getReader();
+  const chunks = [];
+  let totalBytes = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    totalBytes += value.byteLength;
+    if (totalBytes > MAX_LOGIN_BODY_BYTES) {
+      await reader.cancel().catch(() => {});
+      throw new RequestBodyError("请求过长", 413);
+    }
+    chunks.push(value);
+  }
+  if (!totalBytes) return {};
+  const bytes = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  let body;
+  try { body = JSON.parse(new TextDecoder().decode(bytes)); }
+  catch { throw new RequestBodyError("请求格式不正确", 400); }
+  if (!body || typeof body !== "object" || Array.isArray(body)) throw new RequestBodyError("请求内容必须是 JSON 对象", 400);
+  return body;
 }
 
 export async function onRequest({ request, env }) {
@@ -59,10 +98,7 @@ export async function onRequest({ request, env }) {
       const attempt = await countAttempt(env, request);
       if (!attempt) return respond({ error: "无法确认请求来源" }, 403);
       if (attempt.attempts > 5) return respond({ error: "尝试次数过多，请五分钟后重试" }, 429);
-      const text = await request.text();
-      if (text.length > 2048) return respond({ error: "请求过长" }, 400);
-      let body;
-      try { body = JSON.parse(text); } catch { return respond({ error: "请求格式不正确" }, 400); }
+      const body = await readLoginBody(request);
       if (typeof body.password !== "string" || body.password.length > 256 || !bytesEqual(await digest(body.password), await digest(env.ADMIN_PASSWORD))) return respond({ error: "管理员密码错误" }, 401);
       await env.DB.prepare("DELETE FROM admin_login_attempts WHERE id = ?").bind(attempt.key).run();
       const token = await createSession(env.ADMIN_PASSWORD);
@@ -71,7 +107,6 @@ export async function onRequest({ request, env }) {
     if (path === "/api/admin/logout" && request.method === "POST") return respond({ ok: true }, 200, { "Set-Cookie": `${COOKIE}=; Path=/api/admin; Max-Age=0; HttpOnly; Secure; SameSite=Strict` });
     if (!(await validSession(request, env.ADMIN_PASSWORD))) return respond({ error: "请先登录管理员账号" }, 401);
     if (request.method !== "GET") return respond({ error: "方法不支持" }, 405);
-    await env.DB.prepare("CREATE TABLE IF NOT EXISTS game_archives (id TEXT PRIMARY KEY, room_id TEXT NOT NULL, board_id TEXT NOT NULL, mode TEXT NOT NULL, phase TEXT NOT NULL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, data TEXT NOT NULL)").run();
     if (path === "/api/admin/archives") {
       const offset = Math.min(1000000, Math.max(0, Number.parseInt(url.searchParams.get("offset") || "0", 10) || 0));
       const rows = await env.DB.prepare("SELECT id, room_id, board_id, mode, phase, created_at, updated_at FROM game_archives ORDER BY updated_at DESC LIMIT 50 OFFSET ?").bind(offset).all();
@@ -84,5 +119,9 @@ export async function onRequest({ request, env }) {
       return respond({ archive: JSON.parse(row.data) });
     }
     return respond({ error: "接口不存在" }, 404);
-  } catch { return respond({ error: "管理员服务不可用" }, 500); }
+  } catch (error) {
+    if (error instanceof RequestBodyError) return respond({ error: error.message }, error.status);
+    console.error("Admin API request failed", error);
+    return respond({ error: "管理员服务暂时不可用" }, 500);
+  }
 }
