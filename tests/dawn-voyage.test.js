@@ -76,7 +76,7 @@ test("dawn voyage preserves wind rules across undo, witch action and daybreak", 
   assert.equal((await post(`${roomPath}/night-action`, { ...auth, targetSeats: [], skipped: false })).status, 200);
   assert.equal((await post(`${roomPath}/night-finish`, auth)).status, 200);
 
-  const playerResponse = await fetch(`${baseUrl}${roomPath}?clientId=test-1`);
+  const playerResponse = await fetch(`${baseUrl}${roomPath}`, { headers: { "X-Client-Id": "test-1" } });
   const playerRoom = (await playerResponse.json()).room;
   assert.equal(playerRoom.announcedWindDirection, "tailwind");
   assert.equal(playerRoom.windDirection, "");
@@ -89,7 +89,7 @@ test("dawn voyage preserves wind rules across undo, witch action and daybreak", 
   const secondNight = await post(`${roomPath}/night-start`, auth);
   assert.equal(secondNight.status, 200);
   assert.equal((await post(`${roomPath}/night-action`, { ...auth, windDirection: "headwind", targetSeats: [] })).status, 200);
-  const afterWind = await fetch(`${baseUrl}${roomPath}?clientId=${auth.clientId}&judgeToken=${auth.judgeToken}`).then((response) => response.json());
+  const afterWind = await fetch(`${baseUrl}${roomPath}`, { headers: { "X-Client-Id": auth.clientId, Authorization: `Bearer ${auth.judgeToken}` } }).then((response) => response.json());
   const captainStep = afterWind.room.currentNightSteps[afterWind.room.currentNightStepIndex];
   assert.equal(captainStep.id, "captain_board");
   const boardTarget = captainStep.allowedSeats[0];

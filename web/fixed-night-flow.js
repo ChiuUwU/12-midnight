@@ -4,8 +4,12 @@
   else root.FixedNightFlow = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function() {
   'use strict';
-  const boards = ['pre_witch_hunter_idiot_mixed', 'realm_of_trickery', 'mechanical_wolf_spirit_medium'];
-  function enabled(room) { return room?.mode === 'SYSTEM' && room.fixedNightFlow === 1 && boards.includes(room.boardId); }
+  const boards = ['pre_witch_hunter_idiot_mixed','realm_of_trickery','mechanical_wolf_spirit_medium','masquerade','treasure_master','dawn_voyage','wolf_king_guard','follow_neighbor','dark_destruction_2'];
+  const shortSteps = new Set(['mixed_blood_model','idiot_confirm','order_prince_confirm','hunter_confirm','dancer_confirm','masked_man_confirm','captain_confirm','mechanical_knife_confirm','mask_knife_confirm','lia_knife_confirm','treasure_knife_confirm','lia_raise','lia_charge','lia_fog']);
+  const wolfStep = id => ['wolves_kill','treasure_mask_final_kill'].includes(id);
+  const requiredStep = id => ['mixed_blood_model','puppet_select'].includes(id);
+  function duration(id){return wolfStep(id)?120000:shortSteps.has(id)?30000:['mask_check','mask_give'].includes(id)?45000:60000;}
+  function enabled(room) { return room?.mode === 'SYSTEM' && room.fixedNightFlow === 1 && room.nightFlowVersion === 2 && boards.includes(room.boardId); }
   function step(room) { return room.currentNightSteps?.[room.currentNightStepIndex || 0]; }
   function settle(t, now) {
     if (t && t.leaseUntil && now > t.leaseUntil && ['ACTION','FINAL','COUNTING'].includes(t.phase)) pause(t, t.leaseUntil);
@@ -28,6 +32,10 @@
     room.currentNightStepIndex -= 1;
     timing.submitted = true;
     const current = step(room);
+    if (current.id === 'treasure_pick' && room.currentNightSteps[room.currentNightStepIndex+1]?.id === 'treasure_skill') {
+      room.currentNightStepIndex += 1; timing.submitted=false;
+      return true;
+    }
     const matching = room.nightActions.filter(a => a.night === room.night && a.stepId === current.id);
     if (matching.length > 1) {
       const latest = matching[matching.length - 1];
@@ -37,7 +45,7 @@
   }
   function actionable(room, now = Date.now()) {
     const t = settle(room.fixedNightTiming, now);
-    return !!t && ['ACTION', 'FINAL', 'REQUIRED'].includes(t.phase) && (now < t.deadlineAt || step(room)?.id === 'mixed_blood_model') && (!t.submitted || step(room)?.id === 'wolves_kill');
+    return !!t && ['ACTION', 'FINAL', 'REQUIRED'].includes(t.phase) && (now < t.deadlineAt || requiredStep(step(room)?.id)) && (!t.submitted || wolfStep(step(room)?.id));
   }
   function control(room, action, key, now = Date.now()) {
     const t = settle(room.fixedNightTiming, now);
@@ -54,20 +62,23 @@
     }
     if (action === 'ack') {
       if (!['ANNOUNCEMENT', 'GAP'].includes(t.phase) || now < t.readyAt) throw new Error('当前不等待播报确认');
-      t.phase = 'ACTION'; t.deadlineAt = now + (current.id === 'wolves_kill' ? 120000 : 60000); t.leaseUntil = now + 10000;
+      t.phase = 'ACTION'; t.deadlineAt = now + duration(current.id); t.leaseUntil = now + 10000;
     } else if (action === 'extend') {
-      if (current.id !== 'wolves_kill' || t.phase !== 'ACTION' || now >= t.deadlineAt || t.extensions >= 2) throw new Error('当前不能加时');
+      if (!wolfStep(current.id) || t.phase !== 'ACTION' || now >= t.deadlineAt || t.extensions >= 2) throw new Error('当前不能加时');
       t.extensions += 1; t.deadlineAt += 20000;
     } else if (action === 'advance') {
       if (!['ACTION', 'FINAL', 'REQUIRED'].includes(t.phase) || now < t.deadlineAt) throw new Error('步骤尚未结束');
-      if (current.id === 'wolves_kill' && t.phase === 'ACTION' && t.submitted) { t.phase = 'FINAL'; t.deadlineAt = now + 10000; return; }
-      const actorAlive = room.assignments.some(a => a.alive !== false && a.roleId === current.actor);
-      if (current.id === 'mixed_blood_model' && actorAlive && !t.submitted) { t.phase = 'REQUIRED'; return; }
+      const actorAlive = room.assignments.some(a => a.alive !== false && (current.actor==='wolf_team'?['wolf','wolf_king'].includes(a.roleId):a.roleId===current.actor));
+      if (requiredStep(current.id) && actorAlive && !t.submitted) { t.phase = 'REQUIRED'; return; }
       if (!t.submitted) room.nightActions.push({ night: room.night, stepId: current.id, label: current.label, skipped: true, targetSeats: [], timeout: true, createdAt: now });
       room.currentNightStepIndex += 1;
+      if(current.id==='treasure_pick' && !t.submitted && step(room)?.id==='treasure_skill') {
+        room.nightActions.push({night:room.night,stepId:'treasure_skill',skipped:true,targetSeats:[],timeout:true,createdAt:now});
+        room.currentNightStepIndex += 1;
+      }
       start(room, now, 5000);
     } else throw new Error('未知夜间计时操作');
   }
-  function view(room) { settle(room.fixedNightTiming, Date.now()); return room.fixedNightTiming ? { ...room.fixedNightTiming, submitted: undefined } : null; }
-  return { enabled, start, submitted, actionable, control, view, settle, pause };
+  function view(room) { settle(room.fixedNightTiming, Date.now()); return room.fixedNightTiming ? { ...room.fixedNightTiming, submitted: undefined, readyToAdvance: room.fixedNightTiming.phase === 'REQUIRED' ? Boolean(room.fixedNightTiming.submitted) : undefined } : null; }
+  return { enabled, start, submitted, actionable, control, view, settle, pause, duration };
 });

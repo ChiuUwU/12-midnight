@@ -45,3 +45,5 @@ CREATE TABLE IF NOT EXISTS admin_login_attempts (
   window_started_at INTEGER NOT NULL,
   attempts INTEGER NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_admin_login_attempts_window_started_at ON admin_login_attempts(window_started_at);

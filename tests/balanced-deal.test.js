@@ -18,6 +18,14 @@ function deal(boardId, history = [], candidateCount = 200) {
   });
 }
 
+test("dealing never mutates shared board definitions", () => {
+  const original = BOARDS.map((board) => JSON.stringify(board));
+  BOARDS.forEach((board) => {
+    for (let attempt = 0; attempt < 20; attempt += 1) dealBoard(board.id, seats);
+  });
+  assert.deepEqual(BOARDS.map((board) => JSON.stringify(board)), original);
+});
+
 test("all configured boards keep twelve unique seat assignments", () => {
   BOARDS.forEach((board) => {
     const result = deal(board.id);
